@@ -1,7 +1,7 @@
 import Foundation
 
 enum MarkdownRenderer {
-    static func render(_ markdown: String) -> String {
+    static func render(_ markdown: String, localImageBaseURL: URL? = nil) -> String {
         let lines = markdown
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
@@ -39,7 +39,7 @@ enum MarkdownRenderer {
                 let count = headingAnchors[base, default: 0]
                 headingAnchors[base] = count + 1
                 let anchor = count == 0 ? base : "\(base)-\(count)"
-                output.append("<h\(heading.level) id=\"\(escapeAttribute(anchor))\">\(renderInline(heading.text))</h\(heading.level)>")
+                output.append("<h\(heading.level) id=\"\(escapeAttribute(anchor))\">\(renderInline(heading.text, localImageBaseURL: localImageBaseURL))</h\(heading.level)>")
                 index += 1
                 continue
             }
@@ -58,7 +58,7 @@ enum MarkdownRenderer {
                     quoted.append(String(candidate.dropFirst()).trimmingCharacters(in: .whitespaces))
                     index += 1
                 }
-                output.append("<blockquote>\(render(quoted.joined(separator: "\n")))</blockquote>")
+                output.append("<blockquote>\(render(quoted.joined(separator: "\n"), localImageBaseURL: localImageBaseURL))</blockquote>")
                 continue
             }
 
@@ -72,9 +72,9 @@ enum MarkdownRenderer {
                     if let task = taskItem(from: next.text) {
                         containsTasks = true
                         let checked = task.checked ? " checked" : ""
-                        items.append("<li class=\"task-item\"><input type=\"checkbox\"\(checked)> \(renderInline(task.text))</li>")
+                        items.append("<li class=\"task-item\"><input type=\"checkbox\"\(checked)> \(renderInline(task.text, localImageBaseURL: localImageBaseURL))</li>")
                     } else {
-                        items.append("<li>\(renderInline(next.text))</li>")
+                        items.append("<li>\(renderInline(next.text, localImageBaseURL: localImageBaseURL))</li>")
                     }
                     index += 1
                 }
@@ -95,11 +95,11 @@ enum MarkdownRenderer {
                     index += 1
                 }
 
-                let head = headers.map { "<th>\(renderInline($0))</th>" }.joined()
+                let head = headers.map { "<th>\(renderInline($0, localImageBaseURL: localImageBaseURL))</th>" }.joined()
                 let body = rows.map { row in
                     "<tr>" + headers.indices.map { column in
                         let value = column < row.count ? row[column] : ""
-                        return "<td>\(renderInline(value))</td>"
+                        return "<td>\(renderInline(value, localImageBaseURL: localImageBaseURL))</td>"
                     }.joined() + "</tr>"
                 }.joined()
                 output.append("<div class=\"table-wrap\"><table><thead><tr>\(head)</tr></thead><tbody>\(body)</tbody></table></div>")
@@ -115,7 +115,7 @@ enum MarkdownRenderer {
                 paragraph.append(candidate)
                 index += 1
             }
-            output.append("<p>\(renderInline(paragraph.joined(separator: " ")))</p>")
+            output.append("<p>\(renderInline(paragraph.joined(separator: " "), localImageBaseURL: localImageBaseURL))</p>")
         }
 
         return output.joined(separator: "\n")
@@ -133,7 +133,7 @@ enum MarkdownRenderer {
         escape(value).replacingOccurrences(of: "'", with: "&#39;")
     }
 
-    private static func renderInline(_ source: String) -> String {
+    private static func renderInline(_ source: String, localImageBaseURL: URL?) -> String {
         var codeFragments: [String] = []
         var prepared = replacingMatches(in: source, pattern: "`([^`]+)`") { match, original in
             let range = Range(match.range(at: 1), in: original)!
@@ -143,11 +143,18 @@ enum MarkdownRenderer {
         }
 
         prepared = escape(prepared)
-        prepared = replacingMatches(in: prepared, pattern: "!\\[([^\\]]*)\\]\\(([^\\s\\)]+)\\)") { match, original in
+        prepared = replacingMatches(in: prepared, pattern: "!\\[([^\\]]*)\\]\\(([^\\)]+)\\)") { match, original in
             let altRange = Range(match.range(at: 1), in: original)!
             let urlRange = Range(match.range(at: 2), in: original)!
             let alt = String(original[altRange])
             let url = safeDestination(String(original[urlRange]), schemes: ["http", "https", "file", "data"], allowsRelative: true)
+            if localImageBaseURL != nil,
+               url != "#",
+               URLComponents(string: url)?.scheme == nil,
+               !url.hasPrefix("/") {
+                let displayURL = "\(LocalImageSchemeHandler.scheme):///\(url)"
+                return "<img src=\"\(escapeAttribute(displayURL))\" data-markv-src=\"\(escapeAttribute(url))\" alt=\"\(escapeAttribute(alt))\">"
+            }
             return "<img src=\"\(escapeAttribute(url))\" alt=\"\(escapeAttribute(alt))\">"
         }
         prepared = replacingMatches(in: prepared, pattern: "\\[([^\\]]+)\\]\\(([^\\s\\)]+)\\)") { match, original in
@@ -176,13 +183,21 @@ enum MarkdownRenderer {
     }
 
     private static func safeDestination(_ value: String, schemes: Set<String>, allowsRelative: Bool) -> String {
-        let decoded = value.replacingOccurrences(of: "&amp;", with: "&")
+        let decoded = normalizedDestination(value)
         guard let components = URLComponents(string: decoded) else { return "#" }
         if let scheme = components.scheme?.lowercased() {
             return schemes.contains(scheme) ? decoded : "#"
         }
         if allowsRelative, !decoded.contains(":") { return decoded }
         return "#"
+    }
+
+    private static func normalizedDestination(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&#x20;", with: " ", options: .caseInsensitive)
+            .replacingOccurrences(of: "&#32;", with: " ")
+            .replacingOccurrences(of: " ", with: "%20")
     }
 
     private static func replacingMatches(

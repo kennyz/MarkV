@@ -6,15 +6,19 @@
 
 MarkV is a focused, native Markdown reader and WYSIWYG editor for macOS. It combines a quiet writing surface with folder browsing, full-text search, recent files, document outlines, live Markdown formatting, and compact PDF export.
 
+![MarkV interface showing the file library, WYSIWYG editor, formatting toolbar, and document outline](docs/images/markv-interface.png)
+
 ## Highlights
 
 - Native macOS application built with SwiftUI and WebKit
 - Typora-inspired single-canvas WYSIWYG Markdown editing
 - Folder library with opening-content previews and full-text search
+- File context actions for PDF export, path copying, and confirmed Trash deletion
 - Recent-file navigation and drag-and-drop opening from Finder
 - Transparent, resizable document outline with heading navigation
 - Automatic Markdown shortcuts for headings, quotes, lists, tasks, and fenced code
 - Formatting tools for emphasis, links, images, tables, code, rules, and task lists
+- Local image uploads, Finder image drops, and clipboard image paste into an automatic `IMG` folder
 - Khaki and white reading themes
 - English and Simplified Chinese interface languages
 - Focus mode and typewriter mode
@@ -47,11 +51,17 @@ Type Markdown naturally in the editor. Common block prefixes convert automatical
 - `[ ] ` or `[x] ` inside a list for tasks
 - Triple backticks or tildes for fenced code blocks
 
+### Images
+
+Use the image button to insert an image URL or upload a local image. Uploaded, dropped, and pasted images are copied into an `IMG` folder beside the current Markdown document. MarkV automatically resolves duplicate file names and inserts a portable relative Markdown path instead of embedding base64 data.
+
+Right-click a file in the library to export it as PDF, copy its full path, or move it to the Trash after confirmation.
+
 ### Keyboard shortcuts
 
 | Action | Shortcut |
 | --- | --- |
-| New document from template | `Command-N` |
+| New empty document | `Command-N` |
 | Open file | `Command-O` |
 | Open folder | `Shift-Command-O` |
 | Save | `Command-S` |

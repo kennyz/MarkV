@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Markv
 
@@ -55,4 +56,18 @@ import Testing
     #expect(html.contains("class=\"task-list\""))
     #expect(html.contains("type=\"checkbox\" checked"))
     #expect(html.contains("src=\"images/diagram.png\""))
+}
+
+@Test func normalizesImageSpacesAndUsesRestrictedLocalImageScheme() {
+    let baseURL = URL(fileURLWithPath: "/tmp/notes", isDirectory: true)
+    let html = MarkdownRenderer.render(
+        "![](IMG/sample&#x20;image.png)",
+        localImageBaseURL: baseURL
+    )
+
+    #expect(html.contains("src=\"markv-image:///IMG/sample%20image.png\""))
+    #expect(html.contains("data-markv-src=\"IMG/sample%20image.png\""))
+
+    let literalSpace = MarkdownRenderer.render("![](IMG/sample image.png)")
+    #expect(literalSpace.contains("src=\"IMG/sample%20image.png\""))
 }

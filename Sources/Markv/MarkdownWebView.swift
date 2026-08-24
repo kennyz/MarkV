@@ -24,6 +24,7 @@ enum EditorAction: Equatable {
     case taskList
     case link
     case image
+    case insertImage(String)
     case table
     case horizontalRule
     case jumpToHeading(String)
@@ -34,6 +35,12 @@ enum EditorAction: Equatable {
 struct EditorCommand: Identifiable, Equatable {
     let id = UUID()
     let action: EditorAction
+}
+
+struct EditorImagePayload: Equatable {
+    let data: Data
+    let suggestedFilename: String?
+    let mimeType: String?
 }
 
 @MainActor
@@ -156,21 +163,33 @@ struct MarkdownWebView: NSViewRepresentable {
     let command: EditorCommand?
     let onChange: (String) -> Void
     let onPDFExport: (Result<URL, Error>) -> Void
+    let onImageImport: (EditorImagePayload) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onChange: onChange, onPDFExport: onPDFExport)
+        Coordinator(
+            onChange: onChange,
+            onPDFExport: onPDFExport,
+            onImageImport: onImageImport
+        )
     }
 
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
+        if let baseURL {
+            configuration.setURLSchemeHandler(
+                LocalImageSchemeHandler(rootURL: baseURL),
+                forURLScheme: LocalImageSchemeHandler.scheme
+            )
+        }
         configuration.userContentController.addUserScript(WKUserScript(
             source: Self.shortcutDetectorJavaScript,
             injectionTime: .atDocumentStart,
             forMainFrameOnly: true
         ))
         configuration.userContentController.add(context.coordinator, name: "editorChanged")
+        configuration.userContentController.add(context.coordinator, name: "imageImported")
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
@@ -183,7 +202,8 @@ struct MarkdownWebView: NSViewRepresentable {
             theme: theme.rawValue,
             focusMode: focusMode,
             typewriterMode: typewriterMode,
-            language: language.rawValue
+            language: language.rawValue,
+            baseURL: baseURL
         )
         return webView
     }
@@ -191,23 +211,27 @@ struct MarkdownWebView: NSViewRepresentable {
     func updateNSView(_ webView: WKWebView, context: Context) {
         context.coordinator.onChange = onChange
         context.coordinator.onPDFExport = onPDFExport
+        context.coordinator.onImageImport = onImageImport
         let state = Coordinator.NativeState(
             markdown: markdown,
             documentID: documentID,
             theme: theme.rawValue,
             focusMode: focusMode,
             typewriterMode: typewriterMode,
-            language: language.rawValue
+            language: language.rawValue,
+            baseURL: baseURL
         )
         context.coordinator.pending = state
 
         guard context.coordinator.isReady else { return }
-        context.coordinator.apply(state, in: webView)
-        context.coordinator.execute(command, in: webView)
+        context.coordinator.apply(state, in: webView) {
+            context.coordinator.execute(command, in: webView)
+        }
     }
 
     static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "editorChanged")
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "imageImported")
     }
 
     @MainActor
@@ -219,12 +243,14 @@ struct MarkdownWebView: NSViewRepresentable {
             let focusMode: Bool
             let typewriterMode: Bool
             let language: String
+            let baseURL: URL?
         }
 
         var isReady = false
         var pending: NativeState?
         var onChange: (String) -> Void
         var onPDFExport: (Result<URL, Error>) -> Void
+        var onImageImport: (EditorImagePayload) -> Void
         private var lastWebMarkdown: String?
         private var lastNativeMarkdown: String?
         private var lastDocumentID = ""
@@ -232,10 +258,12 @@ struct MarkdownWebView: NSViewRepresentable {
 
         init(
             onChange: @escaping (String) -> Void,
-            onPDFExport: @escaping (Result<URL, Error>) -> Void
+            onPDFExport: @escaping (Result<URL, Error>) -> Void,
+            onImageImport: @escaping (EditorImagePayload) -> Void
         ) {
             self.onChange = onChange
             self.onPDFExport = onPDFExport
+            self.onImageImport = onImageImport
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -246,9 +274,25 @@ struct MarkdownWebView: NSViewRepresentable {
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-            guard message.name == "editorChanged", let markdown = message.body as? String else { return }
-            lastWebMarkdown = markdown
-            onChange(markdown)
+            if message.name == "editorChanged", let markdown = message.body as? String {
+                lastWebMarkdown = markdown
+                onChange(markdown)
+                return
+            }
+
+            guard message.name == "imageImported",
+                  let values = message.body as? [String: Any] else { return }
+            if values["error"] as? String == "tooLarge" {
+                let language = AppLanguage(rawValue: pending?.language ?? "") ?? .english
+                let alert = NSAlert()
+                alert.messageText = language.text("Images larger than 25 MB are not supported.")
+                alert.addButton(withTitle: language.text("OK"))
+                alert.runModal()
+                return
+            }
+            if let payload = MarkdownWebView.imagePayload(from: values) {
+                onImageImport(payload)
+            }
         }
 
         func webView(
@@ -284,19 +328,31 @@ struct MarkdownWebView: NSViewRepresentable {
             completionHandler(alert.runModal() == .alertFirstButtonReturn ? field.stringValue : nil)
         }
 
-        func apply(_ state: NativeState, in webView: WKWebView, force: Bool = false) {
+        func apply(
+            _ state: NativeState,
+            in webView: WKWebView,
+            force: Bool = false,
+            completion: (() -> Void)? = nil
+        ) {
             let documentChanged = state.documentID != lastDocumentID
             let originatedOutsideEditor = state.markdown != lastWebMarkdown && state.markdown != lastNativeMarkdown
 
             if force || documentChanged || originatedOutsideEditor {
-                let html = MarkdownRenderer.render(state.markdown)
+                let html = MarkdownRenderer.render(
+                    state.markdown,
+                    localImageBaseURL: state.baseURL
+                )
                 guard let payload = json([html, state.markdown, state.theme, state.focusMode, state.typewriterMode, state.language]) else { return }
-                webView.evaluateJavaScript("window.markvSetContent(...\(payload))")
+                webView.evaluateJavaScript("window.markvSetContent(...\(payload))") { _, _ in
+                    completion?()
+                }
                 lastNativeMarkdown = state.markdown
                 lastWebMarkdown = nil
                 lastDocumentID = state.documentID
             } else if let payload = json([state.theme, state.focusMode, state.typewriterMode, state.language]) {
-                webView.evaluateJavaScript("window.markvSetPresentation(...\(payload))")
+                webView.evaluateJavaScript("window.markvSetPresentation(...\(payload))") { _, _ in
+                    completion?()
+                }
             }
         }
 
@@ -325,6 +381,7 @@ struct MarkdownWebView: NSViewRepresentable {
             case .taskList: (name, value) = ("taskList", "")
             case .link: (name, value) = ("link", "")
             case .image: (name, value) = ("image", "")
+            case .insertImage(let path): (name, value) = ("insertImage", path)
             case .table: (name, value) = ("table", "")
             case .horizontalRule: (name, value) = ("horizontalRule", "")
             case .jumpToHeading(let anchor): (name, value) = ("jump", anchor)
@@ -373,13 +430,23 @@ struct MarkdownWebView: NSViewRepresentable {
     };
     """#
 
+    static func imagePayload(from values: [String: Any]) -> EditorImagePayload? {
+        guard let base64 = values["base64"] as? String,
+              let data = Data(base64Encoded: base64) else { return nil }
+        return EditorImagePayload(
+            data: data,
+            suggestedFilename: values["name"] as? String,
+            mimeType: values["mimeType"] as? String
+        )
+    }
+
     static let documentShell = #"""
     <!doctype html>
     <html data-theme="khaki" data-language="en">
     <head>
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
-      <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: file: https: http:">
+      <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: file: https: http: markv-image:">
       <style>
         :root { color-scheme:light; --paper:#fcfaf5; --ink:#22231f; --muted:#72736d; --accent:#ba402a; --line:#e5dfd2; --inline:#f0ece2; --table:#f5f1e8; --quote:#5d5f58; }
         :root[data-theme="white"] { --paper:#fff; --ink:#222321; --muted:#737570; --line:#e8e8e3; --inline:#f3f3f0; --table:#f7f7f4; --quote:#60625d; }
@@ -445,6 +512,8 @@ struct MarkdownWebView: NSViewRepresentable {
         let lastMarkdown = '';
         let inputTimer = null;
         let typewriterMode = false;
+        const maximumImportedImageBytes = 25 * 1024 * 1024;
+        let pendingImageRange = null;
 
         function markvSetPresentation(theme, focus, typewriter, language) {
           document.documentElement.dataset.theme = theme;
@@ -456,6 +525,7 @@ struct MarkdownWebView: NSViewRepresentable {
 
         function markvSetContent(html, markdown, theme, focus, typewriter, language) {
           applyingNative = true;
+          pendingImageRange = null;
           markvSetPresentation(theme, focus, typewriter, language);
           editor.innerHTML = html || '<p><br></p>';
           lastMarkdown = markdown;
@@ -513,6 +583,73 @@ struct MarkdownWebView: NSViewRepresentable {
           };
           if (immediate) send(); else inputTimer = setTimeout(send, 140);
         }
+
+        function rememberImageInsertionPoint(range=null) {
+          const selection = window.getSelection();
+          const source = range || (selection && selection.rangeCount ? selection.getRangeAt(0) : null);
+          pendingImageRange = source ? source.cloneRange() : null;
+        }
+
+        function caretRangeAtPoint(x, y) {
+          if (document.caretRangeFromPoint) return document.caretRangeFromPoint(x, y);
+          const position = document.caretPositionFromPoint?.(x, y);
+          if (!position) return null;
+          const range = document.createRange();
+          range.setStart(position.offsetNode, position.offset);
+          range.collapse(true);
+          return range;
+        }
+
+        function transferImageFile(file) {
+          if (!file || !String(file.type || '').startsWith('image/')) return false;
+          if (file.size > maximumImportedImageBytes) {
+            window.webkit.messageHandlers.imageImported.postMessage({error:'tooLarge'});
+            return true;
+          }
+          const reader = new FileReader();
+          reader.onload = () => {
+            const result = String(reader.result || '');
+            const comma = result.indexOf(',');
+            if (comma < 0) return;
+            window.webkit.messageHandlers.imageImported.postMessage({
+              base64: result.slice(comma + 1),
+              mimeType: file.type || '',
+              name: file.name || ''
+            });
+          };
+          reader.readAsDataURL(file);
+          return true;
+        }
+
+        editor.addEventListener('paste', event => {
+          const item = Array.from(event.clipboardData?.items || []).find(candidate =>
+            candidate.kind === 'file' && String(candidate.type || '').startsWith('image/')
+          );
+          const file = item?.getAsFile();
+          if (!file) return;
+          event.preventDefault();
+          rememberImageInsertionPoint();
+          transferImageFile(file);
+        });
+
+        editor.addEventListener('dragover', event => {
+          const hasImage = Array.from(event.dataTransfer?.items || []).some(item =>
+            item.kind === 'file' && String(item.type || '').startsWith('image/')
+          );
+          if (!hasImage) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = 'copy';
+        });
+
+        editor.addEventListener('drop', event => {
+          const file = Array.from(event.dataTransfer?.files || []).find(candidate =>
+            String(candidate.type || '').startsWith('image/')
+          );
+          if (!file) return;
+          event.preventDefault();
+          rememberImageInsertionPoint(caretRangeAtPoint(event.clientX, event.clientY));
+          transferImageFile(file);
+        });
 
         editor.addEventListener('input', () => {
           const converted = applyMarkdownShortcut();
@@ -610,12 +747,38 @@ struct MarkdownWebView: NSViewRepresentable {
           return document.documentElement.dataset.language === 'zh' ? chinese : english;
         }
 
+        function normalizedMarkdownImageSource(value) {
+          return String(value || '')
+            .replace(/&(?:#x20|#32);/gi, ' ')
+            .replace(/ /g, '%20');
+        }
+
+        function insertImageSource(value) {
+          const source = normalizedMarkdownImageSource(value);
+          if (!source) return;
+          const image = document.createElement('img');
+          const isRelative = !/^[a-z][a-z0-9+.-]*:/i.test(source) && !source.startsWith('/');
+          if (isRelative) {
+            image.src = `markv-image:///${source.replace(/^\/+/, '')}`;
+            image.setAttribute('data-markv-src', source);
+          } else {
+            image.src = source;
+          }
+          document.execCommand('insertHTML', false, image.outerHTML);
+        }
+
         window.markvCommand = function(command, value) {
           if (command === 'jump') {
             document.getElementById(value)?.scrollIntoView({behavior:'smooth',block:'start'});
             return;
           }
           editor.focus();
+          if (command === 'insertImage' && pendingImageRange) {
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(pendingImageRange);
+            pendingImageRange = null;
+          }
           switch (command) {
             case 'focus': break;
             case 'block': document.execCommand('formatBlock', false, value); break;
@@ -640,9 +803,10 @@ struct MarkdownWebView: NSViewRepresentable {
             }
             case 'image': {
               const url = window.prompt(markvText('Insert image URL or relative path','插入图片网址或相对路径'), 'images/example.png');
-              if (url) document.execCommand('insertImage',false,url);
+              if (url) insertImageSource(url);
               break;
             }
+            case 'insertImage': insertImageSource(value); break;
           }
           scheduleChange(true);
         };
@@ -668,7 +832,10 @@ struct MarkdownWebView: NSViewRepresentable {
             case 's': case 'del': case 'strike': return `~~${content}~~`;
             case 'code': return node.parentElement?.tagName.toLowerCase() === 'pre' ? content : `\`${content}\``;
             case 'a': return `[${content}](${node.getAttribute('href') || ''})`;
-            case 'img': return `![${node.getAttribute('alt') || ''}](${node.getAttribute('src') || ''})`;
+            case 'img': {
+              const source = node.getAttribute('data-markv-src') || node.getAttribute('src') || '';
+              return `![${node.getAttribute('alt') || ''}](${normalizedMarkdownImageSource(source)})`;
+            }
             case 'br': return '\n';
             case 'input': return node.type === 'checkbox' ? (node.checked ? '[x] ' : '[ ] ') : '';
             default: return content;

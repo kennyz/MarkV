@@ -14,8 +14,8 @@ struct MarkvApp: App {
         .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button(model.text("New from Markdown Starter…")) {
-                    model.createFromStarterTemplate()
+                Button(model.text("New Document…")) {
+                    model.createEmptyDocument()
                 }
                 .keyboardShortcut("n", modifiers: .command)
 
@@ -76,7 +76,8 @@ struct MarkvApp: App {
                 Button(model.text("Task List")) { model.performEditorAction(.taskList) }
                 Button(model.text("Code Block")) { model.performEditorAction(.codeBlock) }
                 Button(model.text("Insert Link…")) { model.performEditorAction(.link) }
-                Button(model.text("Insert Image…")) { model.performEditorAction(.image) }
+                Button(model.text("Image URL…")) { model.performEditorAction(.image) }
+                Button(model.text("Upload Image…")) { model.chooseImageForInsertion() }
                 Button(model.text("Insert Table")) { model.performEditorAction(.table) }
                 Button(model.text("Horizontal Rule")) { model.performEditorAction(.horizontalRule) }
             }

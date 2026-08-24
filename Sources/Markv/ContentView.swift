@@ -65,7 +65,7 @@ struct ContentView: View {
         .background(paper)
         .animation(.easeOut(duration: 0.18), value: model.appearanceTheme)
         .dropDestination(for: URL.self) { urls, _ in
-            model.openExternalFiles(urls)
+            model.handleDroppedFiles(urls)
         } isTargeted: { targeted in
             withAnimation(.easeOut(duration: 0.16)) {
                 isDropTargeted = targeted
@@ -110,7 +110,7 @@ struct ContentView: View {
                     .font(.system(size: 28, weight: .medium))
                 Text(model.text("Drop to open"))
                     .font(.custom("AvenirNext-DemiBold", size: 15))
-                Text(model.text("Markdown files only"))
+                Text(model.text("Markdown and image files"))
                     .font(.custom("AvenirNext-Regular", size: 11))
                     .foregroundStyle(ink.opacity(0.52))
             }
@@ -153,8 +153,8 @@ struct ContentView: View {
 
     private var sidebarTopActions: some View {
         HStack(spacing: 4) {
-            sidebarActionButton("doc.badge.plus", help: model.text("New from Markdown Starter (⌘N)")) {
-                model.createFromStarterTemplate()
+            sidebarActionButton("doc.badge.plus", help: model.text("New Document (⌘N)")) {
+                model.createEmptyDocument()
             }
 
             sidebarActionButton("doc", help: model.text("Open File (⌘O)")) {
@@ -427,6 +427,9 @@ struct ContentView: View {
                     fileRow(file.url, title: file.displayName, preview: file.preview) {
                         model.openFile(file.url)
                     }
+                    .contextMenu {
+                        fileContextMenu(file.url)
+                    }
                 }
             }
         }
@@ -451,6 +454,8 @@ struct ContentView: View {
                         model.openRecent(url)
                     }
                     .contextMenu {
+                        fileContextMenu(url)
+                        Divider()
                         Button(model.text("Remove from Recent")) { model.removeRecent(url) }
                     }
                 }
@@ -500,6 +505,23 @@ struct ContentView: View {
             selected ? paper.opacity(0.88) : Color.clear,
             in: RoundedRectangle(cornerRadius: 8, style: .continuous)
         )
+    }
+
+    @ViewBuilder
+    private func fileContextMenu(_ url: URL) -> some View {
+        Button(model.text("Open File")) {
+            model.openRecent(url)
+        }
+        Button(model.text("Export as PDF")) {
+            model.choosePDFExportDestination(for: url)
+        }
+        Button(model.text("Copy File Path")) {
+            _ = model.copyFilePath(url)
+        }
+        Divider()
+        Button(model.text("Move to Trash"), role: .destructive) {
+            model.confirmMoveFileToTrash(url)
+        }
     }
 
     @ViewBuilder
@@ -711,13 +733,32 @@ struct ContentView: View {
             editorButton("checklist", help: model.text("Task List"), action: .taskList)
             toolbarDivider
             editorButton("link", help: model.text("Insert Link"), action: .link)
-            editorButton("photo", help: model.text("Insert Image"), action: .image)
+            imageInsertMenu
             editorButton("tablecells", help: model.text("Insert Table"), action: .table)
             editorButton("curlybraces", help: model.text("Code Block"), action: .codeBlock)
             editorButton("minus", help: model.text("Horizontal Rule"), action: .horizontalRule)
             Spacer()
         }
         .foregroundStyle(ink.opacity(0.72))
+    }
+
+    private var imageInsertMenu: some View {
+        Menu {
+            Button(model.text("Image URL…")) {
+                model.performEditorAction(.image)
+            }
+            Button(model.text("Upload Image…")) {
+                model.chooseImageForInsertion()
+            }
+        } label: {
+            Image(systemName: "photo")
+                .font(.system(size: 11, weight: .medium))
+                .frame(width: 25, height: 25)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help(model.text("Insert Image"))
     }
 
     private var toolbarDivider: some View {
@@ -752,7 +793,14 @@ struct ContentView: View {
             language: model.appLanguage,
             command: model.editorCommand,
             onChange: { model.updateDocument($0) },
-            onPDFExport: { model.handlePDFExportResult($0) }
+            onPDFExport: { model.handlePDFExportResult($0) },
+            onImageImport: { payload in
+                model.importImageData(
+                    payload.data,
+                    suggestedFilename: payload.suggestedFilename,
+                    mimeType: payload.mimeType
+                )
+            }
         )
             .id(model.currentFile?.path)
             .background(paper)

@@ -188,6 +188,15 @@ final class AppModel: ObservableObject {
         ["md", "markdown", "mdown", "mkd"].contains(url.pathExtension.lowercased())
     }
 
+    nonisolated static func isImageFile(_ url: URL) -> Bool {
+        let fileExtension = url.pathExtension.lowercased()
+        if let type = UTType(filenameExtension: fileExtension), type.conforms(to: .image) {
+            return true
+        }
+        return ["png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "tif", "tiff", "bmp", "svg"]
+            .contains(fileExtension)
+    }
+
     nonisolated static func normalizedRecents(_ urls: [URL], limit: Int = 12) -> [URL] {
         var seen = Set<String>()
         var result: [URL] = []
@@ -302,6 +311,60 @@ final class AppModel: ObservableObject {
         loadFile(url)
     }
 
+    @discardableResult
+    nonisolated static func clipboardPath(for url: URL) -> String {
+        url.standardizedFileURL.path
+    }
+
+    func copyFilePath(_ url: URL) -> Bool {
+        let pasteboard = NSPasteboard.general
+        pasteboard.declareTypes([.string], owner: nil)
+        return pasteboard.setString(Self.clipboardPath(for: url), forType: .string)
+    }
+
+    func confirmMoveFileToTrash(_ url: URL) {
+        let alert = NSAlert()
+        alert.messageText = localizedFormat("Move %@ to Trash?", url.lastPathComponent)
+        alert.informativeText = text("This file will be moved to the Trash.")
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: text("Move to Trash"))
+        alert.addButton(withTitle: text("Cancel"))
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        moveFileToTrash(url)
+    }
+
+    @discardableResult
+    func moveFileToTrash(
+        _ url: URL,
+        operation: ((URL) throws -> Void)? = nil
+    ) -> Bool {
+        let target = url.standardizedFileURL
+        do {
+            if let operation {
+                try operation(target)
+            } else {
+                var trashedURL: NSURL?
+                try FileManager.default.trashItem(at: target, resultingItemURL: &trashedURL)
+            }
+
+            if currentFile?.standardizedFileURL == target {
+                currentFile = nil
+                documentText = ""
+                isDirty = false
+            }
+            removeRecent(target)
+            previewCache.removeValue(forKey: target.path)
+            refreshFiles()
+            return true
+        } catch {
+            errorMessage = localizedFormat(
+                "Markv could not move the file to Trash: %@",
+                error.localizedDescription
+            )
+            return false
+        }
+    }
+
     func files(matching query: String) -> [MarkdownFile] {
         files.filter { $0.matches(query) }
     }
@@ -413,6 +476,14 @@ final class AppModel: ObservableObject {
         return true
     }
 
+    @discardableResult
+    func handleDroppedFiles(_ urls: [URL]) -> Bool {
+        if let image = urls.first(where: Self.isImageFile) {
+            return importImageFile(image)
+        }
+        return openExternalFiles(urls)
+    }
+
     func updateDocument(_ newValue: String) {
         documentText = newValue
         isDirty = currentFile != nil
@@ -422,7 +493,13 @@ final class AppModel: ObservableObject {
         editorCommand = EditorCommand(action: action)
     }
 
-    func choosePDFExportDestination() {
+    func choosePDFExportDestination(for requestedFile: URL? = nil) {
+        if let requestedFile,
+           requestedFile.standardizedFileURL != currentFile?.standardizedFileURL {
+            guard confirmDocumentTransition() else { return }
+            loadFile(requestedFile)
+            guard currentFile?.standardizedFileURL == requestedFile.standardizedFileURL else { return }
+        }
         guard let currentFile else { return }
 
         let panel = NSSavePanel()
@@ -438,6 +515,93 @@ final class AppModel: ObservableObject {
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
         exportPDF(to: url)
+    }
+
+    func chooseImageForInsertion() {
+        guard currentFile != nil else {
+            errorMessage = text("Open or create a Markdown document before importing images.")
+            return
+        }
+
+        let panel = NSOpenPanel()
+        panel.title = text("Upload Image")
+        panel.prompt = text("Upload")
+        panel.allowedContentTypes = [.image]
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = currentFile?.deletingLastPathComponent()
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        importImageFile(url)
+    }
+
+    @discardableResult
+    func importImageFile(_ source: URL) -> Bool {
+        guard Self.isImageFile(source) else {
+            errorMessage = text("Choose an image file.")
+            return false
+        }
+        let securityAccess = source.startAccessingSecurityScopedResource()
+        defer {
+            if securityAccess { source.stopAccessingSecurityScopedResource() }
+        }
+        do {
+            let byteCount = try source.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+            guard byteCount <= 25 * 1024 * 1024 else {
+                errorMessage = text("Images larger than 25 MB are not supported.")
+                return false
+            }
+            let data = try Data(contentsOf: source)
+            return importImageData(
+                data,
+                suggestedFilename: source.lastPathComponent,
+                mimeType: UTType(filenameExtension: source.pathExtension)?.preferredMIMEType
+            )
+        } catch {
+            errorMessage = localizedFormat("Markv could not import the image: %@", error.localizedDescription)
+            return false
+        }
+    }
+
+    @discardableResult
+    func importImageData(
+        _ data: Data,
+        suggestedFilename: String?,
+        mimeType: String?
+    ) -> Bool {
+        guard let currentFile else {
+            errorMessage = text("Open or create a Markdown document before importing images.")
+            return false
+        }
+        guard data.count <= 25 * 1024 * 1024 else {
+            errorMessage = text("Images larger than 25 MB are not supported.")
+            return false
+        }
+
+        let type = mimeType.flatMap {
+            UTType(tag: $0, tagClass: .mimeType, conformingTo: .image)
+        }
+        let fallbackExtension = type?.preferredFilenameExtension ?? "png"
+        let proposed = sanitizedImageFilename(suggestedFilename, fallbackExtension: fallbackExtension)
+
+        do {
+            let imageDirectory = currentFile.deletingLastPathComponent()
+                .appendingPathComponent("IMG", isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: imageDirectory,
+                withIntermediateDirectories: true
+            )
+            let destination = uniqueImageDestination(in: imageDirectory, filename: proposed)
+            try data.write(to: destination, options: .atomic)
+            let encodedName = destination.lastPathComponent.addingPercentEncoding(
+                withAllowedCharacters: CharacterSet.urlPathAllowed
+            ) ?? destination.lastPathComponent
+            performEditorAction(.insertImage("IMG/\(encodedName)"))
+            return true
+        } catch {
+            errorMessage = localizedFormat("Markv could not import the image: %@", error.localizedDescription)
+            return false
+        }
     }
 
     func exportPDF(to url: URL) {
@@ -465,34 +629,42 @@ final class AppModel: ObservableObject {
         DocumentIntelligence.statistics(for: documentText)
     }
 
-    func createFromStarterTemplate() {
+    func createEmptyDocument() {
         guard confirmDocumentTransition() else { return }
 
         let panel = NSSavePanel()
-        panel.title = text("New from Markdown Starter")
+        panel.title = text("New Document")
         panel.prompt = text("Create")
-        panel.nameFieldStringValue = MarkdownTemplate.starter.suggestedFilename
+        panel.nameFieldStringValue = text("Untitled") + ".md"
         panel.directoryURL = currentFolder
         panel.canCreateDirectories = true
 
-        guard panel.runModal() == .OK, var url = panel.url else { return }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        createEmptyDocument(at: url)
+    }
+
+    @discardableResult
+    func createEmptyDocument(at requestedURL: URL) -> Bool {
+        var url = requestedURL
         if url.pathExtension.isEmpty {
             url.appendPathExtension("md")
         }
         guard Self.isMarkdownFile(url) else {
-            errorMessage = text("The template must be saved as a Markdown file.")
-            return
+            errorMessage = text("The document must be saved as a Markdown file.")
+            return false
         }
 
         do {
-            try MarkdownTemplate.starter.content.write(to: url, atomically: true, encoding: .utf8)
+            try "".write(to: url, atomically: true, encoding: .utf8)
             let parent = url.deletingLastPathComponent()
             currentFolder = parent
             defaults.set(parent.path, forKey: Keys.lastFolder)
             refreshFiles()
             loadFile(url)
+            return true
         } catch {
-            errorMessage = localizedFormat("Markv could not create the template: %@", error.localizedDescription)
+            errorMessage = localizedFormat("Markv could not create the document: %@", error.localizedDescription)
+            return false
         }
     }
 
@@ -547,6 +719,36 @@ final class AppModel: ObservableObject {
         recentFiles = Self.normalizedRecents([url] + recentFiles)
         previewCache[url.standardizedFileURL.path] = Self.readPreview(at: url)
         persistRecents()
+    }
+
+    private func sanitizedImageFilename(
+        _ suggestedFilename: String?,
+        fallbackExtension: String
+    ) -> String {
+        var filename = suggestedFilename.map { URL(fileURLWithPath: $0).lastPathComponent } ?? ""
+        filename = filename.trimmingCharacters(in: .whitespacesAndNewlines)
+        if filename.isEmpty {
+            filename = "image.\(fallbackExtension)"
+        } else if URL(fileURLWithPath: filename).pathExtension.isEmpty {
+            filename += ".\(fallbackExtension)"
+        }
+        return filename
+    }
+
+    private func uniqueImageDestination(in directory: URL, filename: String) -> URL {
+        let original = URL(fileURLWithPath: filename)
+        let base = original.deletingPathExtension().lastPathComponent
+        let fileExtension = original.pathExtension
+        var candidate = directory.appendingPathComponent(filename)
+        var suffix = 2
+        while FileManager.default.fileExists(atPath: candidate.path) {
+            let nextName = fileExtension.isEmpty
+                ? "\(base)-\(suffix)"
+                : "\(base)-\(suffix).\(fileExtension)"
+            candidate = directory.appendingPathComponent(nextName)
+            suffix += 1
+        }
+        return candidate
     }
 
     nonisolated private static func readPreview(at url: URL) -> String {

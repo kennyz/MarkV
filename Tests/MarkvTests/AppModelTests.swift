@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import Markv
@@ -6,6 +7,12 @@ import Testing
     #expect(AppModel.isMarkdownFile(URL(fileURLWithPath: "/tmp/notes.MD")))
     #expect(AppModel.isMarkdownFile(URL(fileURLWithPath: "/tmp/readme.markdown")))
     #expect(!AppModel.isMarkdownFile(URL(fileURLWithPath: "/tmp/notes.txt")))
+}
+
+@Test func imageExtensionsUseSystemTypeIdentification() {
+    #expect(AppModel.isImageFile(URL(fileURLWithPath: "/tmp/photo.PNG")))
+    #expect(AppModel.isImageFile(URL(fileURLWithPath: "/tmp/vector.svg")))
+    #expect(!AppModel.isImageFile(URL(fileURLWithPath: "/tmp/notes.md")))
 }
 
 @Test func recentsAreUniqueOrderedAndLimited() {
@@ -68,6 +75,28 @@ import Testing
     #expect(model.editorCommand?.action == .exportPDF(exportWithoutExtension.appendingPathExtension("pdf")))
 }
 
+@Test @MainActor func newDocumentsAreEmptyByDefault() throws {
+    let folder = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+
+    let suiteName = "MarkvEmptyDocumentTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let model = AppModel(defaults: defaults, restoreLastFolder: false)
+    let requested = folder.appendingPathComponent("Blank")
+
+    #expect(model.createEmptyDocument(at: requested))
+    let document = folder.appendingPathComponent("Blank.md").standardizedFileURL
+    #expect(model.currentFile == document)
+    #expect(model.documentText.isEmpty)
+    #expect(!model.isDirty)
+    #expect(model.files.map(\.name) == ["Blank.md"])
+    #expect(model.recentFiles.first == document)
+    #expect((try Data(contentsOf: document)).isEmpty)
+}
+
 @Test @MainActor func renamesCurrentFileAndSynchronizesLibraryState() throws {
     let folder = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -99,6 +128,65 @@ import Testing
     model.appLanguage = .chinese
     #expect(!model.renameCurrentFile(to: "../invalid"))
     #expect(model.errorMessage == "请输入不含路径分隔符的有效文件名。")
+}
+
+@Test @MainActor func fileActionsCopyPathAndClearStateAfterTrash() throws {
+    let folder = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+
+    let file = folder.appendingPathComponent("delete-me.md")
+    try "# Delete me".write(to: file, atomically: true, encoding: .utf8)
+    let suiteName = "MarkvFileActionTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let model = AppModel(defaults: defaults, restoreLastFolder: false)
+    model.openDirectory(folder)
+    model.openFile(file)
+
+    #expect(AppModel.clipboardPath(for: file) == file.standardizedFileURL.path)
+
+    #expect(model.moveFileToTrash(file) { try FileManager.default.removeItem(at: $0) })
+    #expect(model.currentFile == nil)
+    #expect(model.documentText.isEmpty)
+    #expect(model.recentFiles.isEmpty)
+    #expect(model.files.isEmpty)
+}
+
+@Test @MainActor func imageImportsCreateIMGFolderResolveCollisionsAndEmitRelativePaths() throws {
+    let folder = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+
+    let markdown = folder.appendingPathComponent("note.md")
+    try "# Images".write(to: markdown, atomically: true, encoding: .utf8)
+    let sourceImage = folder.appendingPathComponent("sample image.png")
+    let bytes = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+    try bytes.write(to: sourceImage)
+
+    let suiteName = "MarkvImageImportTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let model = AppModel(defaults: defaults, restoreLastFolder: false)
+    model.openDirectory(folder)
+    model.openFile(markdown)
+
+    #expect(model.importImageFile(sourceImage))
+    let first = folder.appendingPathComponent("IMG/sample image.png")
+    #expect(try Data(contentsOf: first) == bytes)
+    #expect(model.editorCommand?.action == .insertImage("IMG/sample%20image.png"))
+
+    #expect(model.importImageData(bytes, suggestedFilename: "sample image.png", mimeType: "image/png"))
+    let second = folder.appendingPathComponent("IMG/sample image-2.png")
+    #expect(try Data(contentsOf: second) == bytes)
+    #expect(model.editorCommand?.action == .insertImage("IMG/sample%20image-2.png"))
+
+    #expect(model.handleDroppedFiles([sourceImage]))
+    let third = folder.appendingPathComponent("IMG/sample image-3.png")
+    #expect(try Data(contentsOf: third) == bytes)
+    #expect(model.editorCommand?.action == .insertImage("IMG/sample%20image-3.png"))
 }
 
 @Test @MainActor func externalDropOpensFirstValidMarkdownFile() throws {
