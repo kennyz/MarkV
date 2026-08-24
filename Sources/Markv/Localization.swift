@@ -1,0 +1,133 @@
+import Foundation
+
+enum AppLanguage: String, CaseIterable, Identifiable {
+    case english = "en"
+    case chinese = "zh"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .english: "English"
+        case .chinese: "中文"
+        }
+    }
+
+    func text(_ english: String) -> String {
+        guard self == .chinese else { return english }
+        return Self.chineseTranslations[english] ?? english
+    }
+
+    func format(_ english: String, _ arguments: CVarArg...) -> String {
+        String(format: text(english), arguments: arguments)
+    }
+
+    private static let chineseTranslations: [String: String] = [
+        "OK": "确定",
+        "Cancel": "取消",
+        "Insert": "插入",
+        "Folder": "当前目录",
+        "Recent": "最近打开",
+        "Drop to open": "放下即可打开",
+        "Markdown files only": "仅支持 Markdown 文件",
+        "Search folder": "搜索当前目录",
+        "Clear Search": "清除搜索",
+        "New from Markdown Starter (⌘N)": "从 Markdown 模板新建 (⌘N)",
+        "Open Folder (⇧⌘O)": "打开文件夹 (⇧⌘O)",
+        "Open File (⌘O)": "打开文档 (⌘O)",
+        "Appearance Settings": "外观设置",
+        "Close Outline": "关闭大纲",
+        "Resize Outline": "调整大纲宽度",
+        "Add headings to build an outline.": "添加标题后将在这里生成大纲。",
+        "DIRECTORY": "当前目录",
+        "Refresh": "刷新",
+        "Choose a folder": "选择文件夹",
+        "No Markdown files here": "此文件夹中没有 Markdown 文件",
+        "No matching documents": "没有匹配的文档",
+        "No recently opened files": "没有最近打开的文件",
+        "Remove from Recent": "从最近打开中移除",
+        "Empty document": "空文档",
+        "A quiet place for Markdown.": "安静地阅读和书写 Markdown。",
+        "Open a folder to begin.": "打开文件夹开始使用。",
+        "Choose a document from the sidebar.": "从左侧选择一个文档。",
+        "Open Folder": "打开文件夹",
+        "Untitled": "未命名",
+        "File name": "文件名",
+        "Double-click to rename": "双击重命名",
+        "Double-click to rename this file": "双击即可重命名此文件",
+        "Focus": "专注",
+        "Typewriter": "打字机",
+        "Hide Outline": "隐藏大纲",
+        "Show Outline": "显示大纲",
+        "Save": "保存",
+        "Paragraph": "正文",
+        "Heading %d": "标题 %d",
+        "Text": "文本",
+        "Bold (⌘B)": "粗体 (⌘B)",
+        "Italic (⌘I)": "斜体 (⌘I)",
+        "Strikethrough": "删除线",
+        "Inline Code": "行内代码",
+        "Blockquote": "引用",
+        "Bullet List": "无序列表",
+        "Numbered List": "有序列表",
+        "Task List": "任务列表",
+        "Insert Link": "插入链接",
+        "Insert Image": "插入图片",
+        "Insert Table": "插入表格",
+        "Code Block": "代码块",
+        "Horizontal Rule": "分隔线",
+        "%d words": "%d 词",
+        "%d characters · %d lines · %d min read": "%d 字符 · %d 行 · 阅读约 %d 分钟",
+        "Reveal in Finder": "在访达中显示",
+        "Appearance": "外观",
+        "Choose the reading surface": "选择阅读与写作界面",
+        "Language": "语言",
+        "Interface language": "界面语言",
+        "Writing": "写作",
+        "Focus mode": "专注模式",
+        "Typewriter mode": "打字机模式",
+        "Khaki": "卡其色",
+        "White": "白色",
+        "Warm paper": "温暖纸张",
+        "Clean neutral": "简洁中性",
+        "New from Markdown Starter…": "从 Markdown 模板新建…",
+        "Open File…": "打开文件…",
+        "Open Folder…": "打开文件夹…",
+        "Export as PDF…": "导出为 PDF…",
+        "Focus Mode": "专注模式",
+        "Typewriter Mode": "打字机模式",
+        "Format": "格式",
+        "Bold": "粗体",
+        "Italic": "斜体",
+        "Insert Link…": "插入链接…",
+        "Insert Image…": "插入图片…",
+        "Choose a Markdown folder": "选择 Markdown 文件夹",
+        "Open a Markdown file": "打开 Markdown 文件",
+        "Open": "打开",
+        "That folder is no longer available.": "该文件夹已不可用。",
+        "Markv could not read this folder: %@": "Markv 无法读取此文件夹：%@",
+        "Enter a valid file name without path separators.": "请输入不含路径分隔符的有效文件名。",
+        "A file named %@ already exists.": "名为 %@ 的文件已存在。",
+        "Markv could not rename the file: %@": "Markv 无法重命名文件：%@",
+        "That recent file is no longer available.": "该最近文件已不可用。",
+        "Drop a Markdown file (.md, .markdown, .mdown, or .mkd) to open it.": "请拖入 Markdown 文件（.md、.markdown、.mdown 或 .mkd）。",
+        "Export as PDF": "导出为 PDF",
+        "Export": "导出",
+        "Markv could not export the PDF: %@": "Markv 无法导出 PDF：%@",
+        "The print operation did not create a PDF file.": "打印操作未能创建 PDF 文件。",
+        "New from Markdown Starter": "从 Markdown 模板新建",
+        "Create": "创建",
+        "The template must be saved as a Markdown file.": "模板必须保存为 Markdown 文件。",
+        "Markv could not create the template: %@": "Markv 无法创建模板：%@",
+        "Markv could not save %@: %@": "Markv 无法保存 %@：%@",
+        "Markv can open Markdown files only.": "Markv 只能打开 Markdown 文件。",
+        "Markv could not open %@: %@": "Markv 无法打开 %@：%@",
+        "Save changes to %@?": "要保存对 %@ 的修改吗？",
+        "Your edits will be lost if you don't save them.": "如果不保存，所做的修改将会丢失。",
+        "Don't Save": "不保存",
+        "Insert link": "插入链接",
+        "Insert image URL or relative path": "插入图片网址或相对路径",
+        "Start writing…": "开始写作…",
+        "Type Markdown naturally…": "自然地输入 Markdown…"
+    ]
+}

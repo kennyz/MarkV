@@ -1,0 +1,8 @@
+.build/
+.swiftpm/
+dist/
+release/
+tmp/
+.DS_Store
+*.dmg
+/new.md
