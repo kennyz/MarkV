@@ -129,6 +129,9 @@ final class AppModel: ObservableObject {
         static let focusMode = "markv.focusMode"
         static let typewriterMode = "markv.typewriterMode"
         static let appLanguage = "markv.appLanguage"
+        static let aiEnabled = "markv.aiEnabled"
+        static let aiBaseURL = "markv.aiBaseURL"
+        static let aiModel = "markv.aiModel"
     }
 
     @Published private(set) var currentFolder: URL?
@@ -150,13 +153,50 @@ final class AppModel: ObservableObject {
     @Published var appLanguage: AppLanguage {
         didSet { defaults.set(appLanguage.rawValue, forKey: Keys.appLanguage) }
     }
+    @Published var aiEnabled: Bool {
+        didSet {
+            defaults.set(aiEnabled, forKey: Keys.aiEnabled)
+            if !aiEnabled { cancelAIInteraction() }
+        }
+    }
+    @Published var aiBaseURL: String {
+        didSet { defaults.set(aiBaseURL, forKey: Keys.aiBaseURL) }
+    }
+    @Published var aiModel: String {
+        didSet { defaults.set(aiModel, forKey: Keys.aiModel) }
+    }
+    @Published var aiAPIKey: String {
+        didSet {
+            do {
+                try aiKeyStore.saveAPIKey(aiAPIKey)
+            } catch {
+                errorMessage = localizedFormat("Markv could not save the API key: %@", error.localizedDescription)
+            }
+        }
+    }
+    @Published var aiInstruction = ""
+    @Published var aiPromptContext: AIPromptContext?
+    @Published private(set) var aiRevision: AIRevision?
+    @Published private(set) var aiIsWorking = false
     @Published var editorCommand: EditorCommand?
 
     private let defaults: UserDefaults
+    private let aiKeyStore: any AIAPIKeyStoring
+    private let aiService: any AICompleting
     private var previewCache: [String: String] = [:]
+    private var pendingAIEditAction: AIEditAction?
+    private var lastAIRequest: AIRequestContext?
+    private var aiTask: Task<Void, Never>?
 
-    init(defaults: UserDefaults = .standard, restoreLastFolder: Bool = true) {
+    init(
+        defaults: UserDefaults = .standard,
+        restoreLastFolder: Bool = true,
+        aiKeyStore: any AIAPIKeyStoring = AIKeychainStore(),
+        aiService: any AICompleting = AIService()
+    ) {
         self.defaults = defaults
+        self.aiKeyStore = aiKeyStore
+        self.aiService = aiService
         self.appearanceTheme = AppearanceTheme(
             rawValue: defaults.string(forKey: Keys.appearanceTheme) ?? ""
         ) ?? .khaki
@@ -165,6 +205,10 @@ final class AppModel: ObservableObject {
         self.appLanguage = AppLanguage(
             rawValue: defaults.string(forKey: Keys.appLanguage) ?? ""
         ) ?? .english
+        self.aiEnabled = defaults.bool(forKey: Keys.aiEnabled)
+        self.aiBaseURL = defaults.string(forKey: Keys.aiBaseURL) ?? "https://api.openai.com/v1"
+        self.aiModel = defaults.string(forKey: Keys.aiModel) ?? ""
+        self.aiAPIKey = (try? aiKeyStore.loadAPIKey()) ?? ""
 
         let stored = defaults.stringArray(forKey: Keys.recentFiles) ?? []
         self.recentFiles = Self.normalizedRecents(
@@ -491,6 +535,190 @@ final class AppModel: ObservableObject {
 
     func performEditorAction(_ action: EditorAction) {
         editorCommand = EditorCommand(action: action)
+    }
+
+    var aiConfiguration: AIConfiguration {
+        AIConfiguration(baseURL: aiBaseURL, model: aiModel, apiKey: aiAPIKey)
+    }
+
+    func beginAISelectionEdit(_ action: AIEditAction) {
+        guard aiEnabled else {
+            errorMessage = text("Enable AI in Settings first.")
+            return
+        }
+        do {
+            _ = try aiConfiguration.endpointURL()
+        } catch {
+            errorMessage = text(error.localizedDescription)
+            return
+        }
+        pendingAIEditAction = action
+        performEditorAction(.captureAISelection)
+    }
+
+    func handleAIEditorEvent(_ event: EditorAIEvent) {
+        guard aiEnabled else { return }
+        switch event {
+        case .slash:
+            do {
+                _ = try aiConfiguration.endpointURL()
+            } catch {
+                errorMessage = text(error.localizedDescription)
+                performEditorAction(.clearAIContext)
+                return
+            }
+            aiInstruction = ""
+            aiPromptContext = .insertion
+            aiRevision = nil
+        case .selection(let value):
+            let original = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !original.isEmpty else {
+                pendingAIEditAction = nil
+                errorMessage = text("Select text before using AI editing.")
+                performEditorAction(.clearAIContext)
+                return
+            }
+            guard original.count <= 100_000 else {
+                pendingAIEditAction = nil
+                errorMessage = text("The selected text is too long for AI editing.")
+                performEditorAction(.clearAIContext)
+                return
+            }
+            let action = pendingAIEditAction ?? .custom
+            pendingAIEditAction = nil
+            if action == .custom {
+                aiInstruction = ""
+                aiPromptContext = .selection(original: original)
+            } else {
+                startAIRequest(.selection(original: original, instruction: action.instruction))
+            }
+        }
+    }
+
+    func submitAIPrompt() {
+        guard let context = aiPromptContext else { return }
+        let instruction = aiInstruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !instruction.isEmpty else {
+            errorMessage = text("Enter an instruction for AI.")
+            return
+        }
+        guard instruction.count <= 10_000 else {
+            errorMessage = text("The AI instruction is too long.")
+            return
+        }
+        aiPromptContext = nil
+        aiInstruction = ""
+        switch context {
+        case .selection(let original):
+            startAIRequest(.selection(original: original, instruction: instruction))
+        case .insertion:
+            startAIRequest(.insertion(instruction: instruction))
+        }
+    }
+
+    func cancelAIPrompt() {
+        aiPromptContext = nil
+        aiInstruction = ""
+        performEditorAction(.clearAIContext)
+    }
+
+    func cancelAIInteraction() {
+        aiTask?.cancel()
+        aiTask = nil
+        aiIsWorking = false
+        aiPromptContext = nil
+        aiRevision = nil
+        aiInstruction = ""
+        pendingAIEditAction = nil
+        performEditorAction(.clearAIContext)
+    }
+
+    func retryAIRevision() {
+        guard let lastAIRequest else { return }
+        startAIRequest(lastAIRequest)
+    }
+
+    func discardAIRevision() {
+        aiRevision = nil
+        performEditorAction(.clearAIContext)
+    }
+
+    func acceptAIRevision(replaceSelection: Bool = true) {
+        guard let revision = aiRevision else { return }
+        aiRevision = nil
+        switch revision.mode {
+        case .selection:
+            performEditorAction(
+                replaceSelection
+                    ? .replaceAISelection(revision.revised)
+                    : .insertAfterAISelection(revision.revised)
+            )
+        case .insertion:
+            let markdown = AIRequestFactory.normalizedMarkdown(revision.revised)
+            let html = MarkdownRenderer.render(markdown, localImageBaseURL: currentFile?.deletingLastPathComponent())
+            performEditorAction(.replaceAISlashHTML(html))
+        }
+    }
+
+    private func startAIRequest(_ context: AIRequestContext) {
+        let configuration = aiConfiguration
+        do {
+            _ = try configuration.endpointURL()
+        } catch {
+            errorMessage = text(error.localizedDescription)
+            return
+        }
+
+        aiTask?.cancel()
+        aiIsWorking = true
+        aiRevision = nil
+        lastAIRequest = context
+        let messages = AIRequestFactory.messages(for: context)
+        let service = aiService
+        aiTask = Task { [weak self] in
+            do {
+                let result = try await service.complete(
+                    configuration: configuration,
+                    messages: messages
+                )
+                guard !Task.isCancelled, let self else { return }
+                self.aiIsWorking = false
+                self.aiTask = nil
+                switch context {
+                case .selection(let original, _):
+                    self.aiRevision = AIRevision(
+                        mode: .selection,
+                        original: original,
+                        revised: result.trimmingCharacters(in: .whitespacesAndNewlines)
+                    )
+                case .insertion:
+                    self.aiRevision = AIRevision(
+                        mode: .insertion,
+                        original: "",
+                        revised: AIRequestFactory.normalizedMarkdown(result)
+                    )
+                }
+            } catch is CancellationError {
+                guard let self else { return }
+                self.aiIsWorking = false
+                self.aiTask = nil
+            } catch {
+                guard let self else { return }
+                self.aiIsWorking = false
+                self.aiTask = nil
+                let description = self.redactedAIErrorDescription(error)
+                self.errorMessage = self.localizedFormat(
+                    "AI request failed: %@",
+                    self.text(description)
+                )
+            }
+        }
+    }
+
+    private func redactedAIErrorDescription(_ error: Error) -> String {
+        let key = aiAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return error.localizedDescription }
+        return error.localizedDescription.replacingOccurrences(of: key, with: "••••")
     }
 
     func choosePDFExportDestination(for requestedFile: URL? = nil) {

@@ -7,6 +7,7 @@ BUILD_DIR="$PROJECT_DIR/.build"
 DIST_DIR="$PROJECT_DIR/dist"
 APP_BUNDLE="$DIST_DIR/Markv.app"
 ICONSET="$BUILD_DIR/Markv.iconset"
+SIGN_IDENTITY="${MARKV_SIGN_IDENTITY:--}"
 
 export SWIFTPM_MODULECACHE_OVERRIDE="$BUILD_DIR/module-cache"
 export CLANG_MODULE_CACHE_PATH="$BUILD_DIR/module-cache"
@@ -31,7 +32,16 @@ for spec in "16 icon_16x16.png" "32 icon_16x16@2x.png" "32 icon_32x32.png" "64 i
 done
 
 swift "$PROJECT_DIR/scripts/make-icns.swift" "$ICONSET" "$APP_BUNDLE/Contents/Resources/Markv.icns"
-codesign --force --deep --sign - "$APP_BUNDLE"
+if [[ "$SIGN_IDENTITY" == "-" ]]; then
+  codesign --force --sign - "$APP_BUNDLE"
+else
+  codesign \
+    --force \
+    --options runtime \
+    --timestamp \
+    --sign "$SIGN_IDENTITY" \
+    "$APP_BUNDLE"
+fi
 
 plutil -lint "$APP_BUNDLE/Contents/Info.plist"
 codesign --verify --deep --strict "$APP_BUNDLE"

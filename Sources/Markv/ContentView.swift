@@ -45,6 +45,7 @@ struct ContentView: View {
     @State private var isOutlineResizeHovered = false
     @AppStorage("markv.outlineWidth") private var storedOutlineWidth = Double(MarkvDocumentLayout.defaultOutlineWidth)
     @FocusState private var isFileNameFieldFocused: Bool
+    @FocusState private var isAIPromptFocused: Bool
 
     private var palette: MarkvPalette { MarkvPalette(theme: model.appearanceTheme) }
     private var paper: Color { palette.paper }
@@ -592,6 +593,11 @@ struct ContentView: View {
             documentFooter
         }
         .background(paper)
+        .overlay(alignment: .bottomTrailing) {
+            aiOverlay
+                .padding(.trailing, 18)
+                .padding(.bottom, 38)
+        }
     }
 
     private var documentHeader: some View {
@@ -737,9 +743,151 @@ struct ContentView: View {
             editorButton("tablecells", help: model.text("Insert Table"), action: .table)
             editorButton("curlybraces", help: model.text("Code Block"), action: .codeBlock)
             editorButton("minus", help: model.text("Horizontal Rule"), action: .horizontalRule)
+            if model.aiEnabled {
+                toolbarDivider
+                aiEditMenu
+            }
             Spacer()
         }
         .foregroundStyle(ink.opacity(0.72))
+    }
+
+    private var aiEditMenu: some View {
+        Menu {
+            ForEach(AIEditAction.allCases) { action in
+                Button(model.text(action.titleKey)) {
+                    model.beginAISelectionEdit(action)
+                }
+            }
+        } label: {
+            Image(systemName: "sparkles")
+                .font(.system(size: 11, weight: .semibold))
+                .frame(width: 25, height: 25)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .foregroundStyle(accent)
+        .help(model.text("AI"))
+        .disabled(model.aiIsWorking)
+    }
+
+    @ViewBuilder
+    private var aiOverlay: some View {
+        if model.aiIsWorking {
+            aiCard {
+                HStack(spacing: 10) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(model.text("AI is working…"))
+                        .font(.custom("AvenirNext-Medium", size: 11))
+                    Spacer()
+                    Button(model.text("Cancel Request")) {
+                        model.cancelAIInteraction()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.custom("AvenirNext-Medium", size: 10))
+                    .foregroundStyle(accent)
+                }
+            }
+            .frame(width: 360)
+        } else if let promptContext = model.aiPromptContext {
+            aiCard {
+                VStack(alignment: .leading, spacing: 10) {
+                    Label(model.text("AI instruction"), systemImage: "sparkles")
+                        .font(.custom("AvenirNext-DemiBold", size: 12))
+                        .foregroundStyle(accent)
+                    Text(promptContext == .insertion
+                         ? model.text("What should AI write?")
+                         : model.text("How should AI edit the selected text?"))
+                        .font(.custom("AvenirNext-Regular", size: 10))
+                        .foregroundStyle(ink.opacity(0.52))
+                    TextField(model.text("AI instruction"), text: $model.aiInstruction, axis: .vertical)
+                        .textFieldStyle(.plain)
+                        .font(.custom("AvenirNext-Regular", size: 11))
+                        .lineLimit(2...5)
+                        .padding(8)
+                        .background(ink.opacity(0.045), in: RoundedRectangle(cornerRadius: 7))
+                        .focused($isAIPromptFocused)
+                        .onAppear { isAIPromptFocused = true }
+                    HStack {
+                        Spacer()
+                        Button(model.text("Cancel")) { model.cancelAIPrompt() }
+                            .buttonStyle(.plain)
+                        Button(model.text("Generate")) { model.submitAIPrompt() }
+                            .buttonStyle(.borderedProminent)
+                    }
+                    .font(.custom("AvenirNext-Medium", size: 10))
+                }
+            }
+            .frame(width: 390)
+        } else if let revision = model.aiRevision {
+            aiCard {
+                VStack(alignment: .leading, spacing: 10) {
+                    Label(model.text("AI Suggestion"), systemImage: "sparkles")
+                        .font(.custom("AvenirNext-DemiBold", size: 12))
+                        .foregroundStyle(accent)
+
+                    if revision.mode == .selection {
+                        revisionTextSection(model.text("Original"), text: revision.original, muted: true)
+                        Divider()
+                    }
+                    revisionTextSection(model.text("Suggested"), text: revision.revised, muted: false)
+
+                    HStack(spacing: 9) {
+                        Button(model.text("Discard")) { model.discardAIRevision() }
+                            .buttonStyle(.plain)
+                        Button(model.text("Try Again")) { model.retryAIRevision() }
+                            .buttonStyle(.plain)
+                        Spacer()
+                        if revision.mode == .selection {
+                            Button(model.text("Insert Below")) {
+                                model.acceptAIRevision(replaceSelection: false)
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        Button(model.text(revision.mode == .selection ? "Replace" : "Insert")) {
+                            model.acceptAIRevision()
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    .font(.custom("AvenirNext-Medium", size: 10))
+                }
+            }
+            .frame(width: 450)
+        }
+    }
+
+    private func aiCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        content()
+            .padding(14)
+            .foregroundStyle(ink)
+            .background(
+                paper.opacity(0.98),
+                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(ink.opacity(0.10), lineWidth: 1)
+            }
+            .shadow(color: ink.opacity(0.12), radius: 18, y: 8)
+    }
+
+    private func revisionTextSection(_ title: String, text: String, muted: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title.uppercased())
+                .font(.custom("AvenirNext-DemiBold", size: 8))
+                .tracking(1)
+                .foregroundStyle(ink.opacity(0.40))
+            ScrollView {
+                Text(text)
+                    .font(.custom("AvenirNext-Regular", size: 11))
+                    .foregroundStyle(ink.opacity(muted ? 0.52 : 0.88))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 120)
+        }
     }
 
     private var imageInsertMenu: some View {
@@ -791,6 +939,7 @@ struct ContentView: View {
             focusMode: model.focusMode,
             typewriterMode: model.typewriterMode,
             language: model.appLanguage,
+            aiEnabled: model.aiEnabled,
             command: model.editorCommand,
             onChange: { model.updateDocument($0) },
             onPDFExport: { model.handlePDFExportResult($0) },
@@ -800,7 +949,8 @@ struct ContentView: View {
                     suggestedFilename: payload.suggestedFilename,
                     mimeType: payload.mimeType
                 )
-            }
+            },
+            onAIEvent: { model.handleAIEditorEvent($0) }
         )
             .id(model.currentFile?.path)
             .background(paper)
@@ -1021,11 +1171,66 @@ private struct AppearanceSettingsView: View {
             }
             .font(.custom("AvenirNext-Medium", size: 11))
             .toggleStyle(.switch)
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 9) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(model.text("AI Extension"))
+                            .font(.custom("AvenirNext-DemiBold", size: 11))
+                        Text(model.text("OpenAI-compatible API"))
+                            .font(.custom("AvenirNext-Regular", size: 9))
+                            .foregroundStyle(ink.opacity(0.45))
+                    }
+                    Spacer()
+                    Toggle(model.text("Enable AI"), isOn: $model.aiEnabled)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                }
+
+                if model.aiEnabled {
+                    VStack(alignment: .leading, spacing: 7) {
+                        aiSettingField(model.text("Base URL")) {
+                            TextField("https://api.openai.com/v1", text: $model.aiBaseURL)
+                        }
+                        aiSettingField(model.text("Model")) {
+                            TextField(model.text("Model"), text: $model.aiModel)
+                        }
+                        aiSettingField(model.text("API Key")) {
+                            SecureField(model.text("Optional for local services"), text: $model.aiAPIKey)
+                        }
+                    }
+                    .textFieldStyle(.roundedBorder)
+                    .font(.custom("AvenirNext-Regular", size: 10))
+
+                    Text(model.text("API key is stored in macOS Keychain and sent only to the configured endpoint."))
+                        .font(.custom("AvenirNext-Regular", size: 9))
+                        .foregroundStyle(ink.opacity(0.46))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(model.text("Select text and use the sparkle menu, or type / in an empty paragraph."))
+                        .font(.custom("AvenirNext-Regular", size: 9))
+                        .foregroundStyle(ink.opacity(0.46))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
         }
         .foregroundStyle(ink)
         .padding(18)
-        .frame(width: 310)
+        .frame(width: 380)
         .background(Color.white)
+    }
+
+    private func aiSettingField<Content: View>(
+        _ label: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label)
+                .font(.custom("AvenirNext-Medium", size: 9))
+                .foregroundStyle(ink.opacity(0.55))
+            content()
+        }
     }
 
     private func themeCard(_ theme: AppearanceTheme) -> some View {

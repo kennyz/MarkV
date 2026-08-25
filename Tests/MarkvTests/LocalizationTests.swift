@@ -9,6 +9,9 @@ import Testing
     #expect(AppLanguage.chinese.text("Resize Outline") == "调整大纲宽度")
     #expect(AppLanguage.chinese.text("Move to Trash") == "移到废纸篓")
     #expect(AppLanguage.chinese.text("Upload Image…") == "上传图片…")
+    #expect(AppLanguage.chinese.text("AI Extension") == "AI 扩展")
+    #expect(AppLanguage.chinese.text("Improve Writing") == "优化表达")
+    #expect(AppLanguage.chinese.text("AI Suggestion") == "AI 建议")
     #expect(AppLanguage.chinese.format("Heading %d", 3) == "标题 3")
     #expect(AppLanguage.chinese.format("A file named %@ already exists.", "note.md") == "名为 note.md 的文件已存在。")
 }

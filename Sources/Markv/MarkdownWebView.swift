@@ -25,6 +25,11 @@ enum EditorAction: Equatable {
     case link
     case image
     case insertImage(String)
+    case captureAISelection
+    case replaceAISelection(String)
+    case insertAfterAISelection(String)
+    case replaceAISlashHTML(String)
+    case clearAIContext
     case table
     case horizontalRule
     case jumpToHeading(String)
@@ -41,6 +46,11 @@ struct EditorImagePayload: Equatable {
     let data: Data
     let suggestedFilename: String?
     let mimeType: String?
+}
+
+enum EditorAIEvent: Equatable {
+    case selection(String)
+    case slash
 }
 
 @MainActor
@@ -160,16 +170,19 @@ struct MarkdownWebView: NSViewRepresentable {
     let focusMode: Bool
     let typewriterMode: Bool
     let language: AppLanguage
+    let aiEnabled: Bool
     let command: EditorCommand?
     let onChange: (String) -> Void
     let onPDFExport: (Result<URL, Error>) -> Void
     let onImageImport: (EditorImagePayload) -> Void
+    let onAIEvent: (EditorAIEvent) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
             onChange: onChange,
             onPDFExport: onPDFExport,
-            onImageImport: onImageImport
+            onImageImport: onImageImport,
+            onAIEvent: onAIEvent
         )
     }
 
@@ -190,6 +203,7 @@ struct MarkdownWebView: NSViewRepresentable {
         ))
         configuration.userContentController.add(context.coordinator, name: "editorChanged")
         configuration.userContentController.add(context.coordinator, name: "imageImported")
+        configuration.userContentController.add(context.coordinator, name: "aiEvent")
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
@@ -203,6 +217,7 @@ struct MarkdownWebView: NSViewRepresentable {
             focusMode: focusMode,
             typewriterMode: typewriterMode,
             language: language.rawValue,
+            aiEnabled: aiEnabled,
             baseURL: baseURL
         )
         return webView
@@ -212,6 +227,7 @@ struct MarkdownWebView: NSViewRepresentable {
         context.coordinator.onChange = onChange
         context.coordinator.onPDFExport = onPDFExport
         context.coordinator.onImageImport = onImageImport
+        context.coordinator.onAIEvent = onAIEvent
         let state = Coordinator.NativeState(
             markdown: markdown,
             documentID: documentID,
@@ -219,6 +235,7 @@ struct MarkdownWebView: NSViewRepresentable {
             focusMode: focusMode,
             typewriterMode: typewriterMode,
             language: language.rawValue,
+            aiEnabled: aiEnabled,
             baseURL: baseURL
         )
         context.coordinator.pending = state
@@ -232,6 +249,7 @@ struct MarkdownWebView: NSViewRepresentable {
     static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "editorChanged")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "imageImported")
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "aiEvent")
     }
 
     @MainActor
@@ -243,6 +261,7 @@ struct MarkdownWebView: NSViewRepresentable {
             let focusMode: Bool
             let typewriterMode: Bool
             let language: String
+            let aiEnabled: Bool
             let baseURL: URL?
         }
 
@@ -251,6 +270,7 @@ struct MarkdownWebView: NSViewRepresentable {
         var onChange: (String) -> Void
         var onPDFExport: (Result<URL, Error>) -> Void
         var onImageImport: (EditorImagePayload) -> Void
+        var onAIEvent: (EditorAIEvent) -> Void
         private var lastWebMarkdown: String?
         private var lastNativeMarkdown: String?
         private var lastDocumentID = ""
@@ -259,11 +279,13 @@ struct MarkdownWebView: NSViewRepresentable {
         init(
             onChange: @escaping (String) -> Void,
             onPDFExport: @escaping (Result<URL, Error>) -> Void,
-            onImageImport: @escaping (EditorImagePayload) -> Void
+            onImageImport: @escaping (EditorImagePayload) -> Void,
+            onAIEvent: @escaping (EditorAIEvent) -> Void
         ) {
             self.onChange = onChange
             self.onPDFExport = onPDFExport
             self.onImageImport = onImageImport
+            self.onAIEvent = onAIEvent
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -279,6 +301,7 @@ struct MarkdownWebView: NSViewRepresentable {
                 onChange(markdown)
                 return
             }
+            if handleAIMessage(message) { return }
 
             guard message.name == "imageImported",
                   let values = message.body as? [String: Any] else { return }
@@ -293,6 +316,22 @@ struct MarkdownWebView: NSViewRepresentable {
             if let payload = MarkdownWebView.imagePayload(from: values) {
                 onImageImport(payload)
             }
+            return
+        }
+
+        private func handleAIMessage(_ message: WKScriptMessage) -> Bool {
+            guard message.name == "aiEvent",
+                  let values = message.body as? [String: Any],
+                  let type = values["type"] as? String else { return false }
+            switch type {
+            case "selection":
+                onAIEvent(.selection(values["text"] as? String ?? ""))
+            case "slash":
+                onAIEvent(.slash)
+            default:
+                break
+            }
+            return true
         }
 
         func webView(
@@ -342,14 +381,14 @@ struct MarkdownWebView: NSViewRepresentable {
                     state.markdown,
                     localImageBaseURL: state.baseURL
                 )
-                guard let payload = json([html, state.markdown, state.theme, state.focusMode, state.typewriterMode, state.language]) else { return }
+                guard let payload = json([html, state.markdown, state.theme, state.focusMode, state.typewriterMode, state.language, state.aiEnabled]) else { return }
                 webView.evaluateJavaScript("window.markvSetContent(...\(payload))") { _, _ in
                     completion?()
                 }
                 lastNativeMarkdown = state.markdown
                 lastWebMarkdown = nil
                 lastDocumentID = state.documentID
-            } else if let payload = json([state.theme, state.focusMode, state.typewriterMode, state.language]) {
+            } else if let payload = json([state.theme, state.focusMode, state.typewriterMode, state.language, state.aiEnabled]) {
                 webView.evaluateJavaScript("window.markvSetPresentation(...\(payload))") { _, _ in
                     completion?()
                 }
@@ -382,6 +421,11 @@ struct MarkdownWebView: NSViewRepresentable {
             case .link: (name, value) = ("link", "")
             case .image: (name, value) = ("image", "")
             case .insertImage(let path): (name, value) = ("insertImage", path)
+            case .captureAISelection: (name, value) = ("captureAISelection", "")
+            case .replaceAISelection(let text): (name, value) = ("replaceAISelection", text)
+            case .insertAfterAISelection(let text): (name, value) = ("insertAfterAISelection", text)
+            case .replaceAISlashHTML(let html): (name, value) = ("replaceAISlashHTML", html)
+            case .clearAIContext: (name, value) = ("clearAIContext", "")
             case .table: (name, value) = ("table", "")
             case .horizontalRule: (name, value) = ("horizontalRule", "")
             case .jumpToHeading(let anchor): (name, value) = ("jump", anchor)
@@ -512,21 +556,27 @@ struct MarkdownWebView: NSViewRepresentable {
         let lastMarkdown = '';
         let inputTimer = null;
         let typewriterMode = false;
+        let aiEnabled = false;
+        let pendingAISelectionRange = null;
+        let pendingAISlashBlock = null;
         const maximumImportedImageBytes = 25 * 1024 * 1024;
         let pendingImageRange = null;
 
-        function markvSetPresentation(theme, focus, typewriter, language) {
+        function markvSetPresentation(theme, focus, typewriter, language, enabledAI) {
           document.documentElement.dataset.theme = theme;
           document.documentElement.dataset.language = language || 'en';
           document.body.classList.toggle('focus-mode', !!focus);
           typewriterMode = !!typewriter;
+          aiEnabled = !!enabledAI;
           updateActiveBlock(false);
         }
 
-        function markvSetContent(html, markdown, theme, focus, typewriter, language) {
+        function markvSetContent(html, markdown, theme, focus, typewriter, language, enabledAI) {
           applyingNative = true;
           pendingImageRange = null;
-          markvSetPresentation(theme, focus, typewriter, language);
+          pendingAISelectionRange = null;
+          pendingAISlashBlock = null;
+          markvSetPresentation(theme, focus, typewriter, language, enabledAI);
           editor.innerHTML = html || '<p><br></p>';
           lastMarkdown = markdown;
           decorateDocument();
@@ -621,6 +671,53 @@ struct MarkdownWebView: NSViewRepresentable {
           return true;
         }
 
+        function requestSlashAI() {
+          if (!aiEnabled) return false;
+          const block = activeTopBlock();
+          if (!block || !['P','DIV'].includes(block.tagName) || block.textContent !== '/') {
+            if (pendingAISlashBlock && pendingAISlashBlock?.textContent !== '/') {
+              pendingAISlashBlock = null;
+            }
+            return false;
+          }
+          if (pendingAISlashBlock === block) return false;
+          pendingAISlashBlock = block;
+          window.webkit.messageHandlers.aiEvent.postMessage({type:'slash'});
+          return true;
+        }
+
+        function captureAISelection() {
+          const selection = window.getSelection();
+          if (!selection || !selection.rangeCount || selection.isCollapsed) {
+            window.webkit.messageHandlers.aiEvent.postMessage({type:'selection', text:''});
+            return;
+          }
+          const range = selection.getRangeAt(0);
+          const container = range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE
+            ? range.commonAncestorContainer
+            : range.commonAncestorContainer.parentElement;
+          if (!container || !editor.contains(container)) {
+            window.webkit.messageHandlers.aiEvent.postMessage({type:'selection', text:''});
+            return;
+          }
+          pendingAISelectionRange = range.cloneRange();
+          window.webkit.messageHandlers.aiEvent.postMessage({
+            type:'selection',
+            text: selection.toString()
+          });
+        }
+
+        function restoreAISelection(collapseToEnd=false) {
+          if (!pendingAISelectionRange) return false;
+          const selection = window.getSelection();
+          selection.removeAllRanges();
+          const range = pendingAISelectionRange.cloneRange();
+          if (collapseToEnd) range.collapse(false);
+          selection.addRange(range);
+          editor.focus();
+          return true;
+        }
+
         editor.addEventListener('paste', event => {
           const item = Array.from(event.clipboardData?.items || []).find(candidate =>
             candidate.kind === 'file' && String(candidate.type || '').startsWith('image/')
@@ -653,6 +750,7 @@ struct MarkdownWebView: NSViewRepresentable {
 
         editor.addEventListener('input', () => {
           const converted = applyMarkdownShortcut();
+          requestSlashAI();
           scheduleChange(converted);
         });
         editor.addEventListener('change', () => scheduleChange(true));
@@ -770,6 +868,55 @@ struct MarkdownWebView: NSViewRepresentable {
         window.markvCommand = function(command, value) {
           if (command === 'jump') {
             document.getElementById(value)?.scrollIntoView({behavior:'smooth',block:'start'});
+            return;
+          }
+          if (command === 'captureAISelection') {
+            captureAISelection();
+            return;
+          }
+          if (command === 'clearAIContext') {
+            pendingAISelectionRange = null;
+            pendingAISlashBlock = null;
+            return;
+          }
+          if (command === 'replaceAISelection') {
+            if (restoreAISelection(false)) {
+              document.execCommand('insertText', false, value);
+              pendingAISelectionRange = null;
+              scheduleChange(true);
+            }
+            return;
+          }
+          if (command === 'insertAfterAISelection') {
+            if (pendingAISelectionRange) {
+              let node = pendingAISelectionRange.endContainer.nodeType === Node.ELEMENT_NODE
+                ? pendingAISelectionRange.endContainer
+                : pendingAISelectionRange.endContainer.parentElement;
+              while (node && node.parentElement !== editor) node = node.parentElement;
+              const paragraph = document.createElement('p');
+              paragraph.textContent = value;
+              if (node && node.parentElement === editor) {
+                node.insertAdjacentElement('afterend', paragraph);
+              } else {
+                editor.appendChild(paragraph);
+              }
+              placeCaretAtEnd(paragraph);
+              pendingAISelectionRange = null;
+              scheduleChange(true);
+            }
+            return;
+          }
+          if (command === 'replaceAISlashHTML') {
+            if (pendingAISlashBlock && pendingAISlashBlock.isConnected) {
+              const template = document.createElement('template');
+              template.innerHTML = value;
+              const nodes = Array.from(template.content.childNodes);
+              pendingAISlashBlock.replaceWith(template.content);
+              pendingAISlashBlock = null;
+              const target = nodes.reverse().find(node => node.nodeType === Node.ELEMENT_NODE);
+              if (target) placeCaretAtEnd(target);
+              scheduleChange(true);
+            }
             return;
           }
           editor.focus();

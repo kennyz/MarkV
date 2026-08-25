@@ -21,6 +21,7 @@ MarkV is a focused, native Markdown reader and WYSIWYG editor for macOS. It comb
 - Local image uploads, Finder image drops, and clipboard image paste into an automatic `IMG` folder
 - Khaki and white reading themes
 - English and Simplified Chinese interface languages
+- Optional OpenAI-compatible AI editing with custom endpoint and model settings
 - Focus mode and typewriter mode
 - Word, character, line, and reading-time statistics
 - Vector-based, paginated A4 PDF export
@@ -30,11 +31,10 @@ MarkV is a focused, native Markdown reader and WYSIWYG editor for macOS. It comb
 
 Download the latest Apple Silicon DMG from the [GitHub Releases page](../../releases/latest).
 
-The downloadable build is ad-hoc signed but not Apple-notarized. On first launch:
+The downloadable build is signed with a Developer ID Application certificate and notarized by Apple. To install:
 
 1. Open the DMG and drag **Markv.app** to **Applications**.
-2. In Finder, Control-click or right-click **Markv.app** and choose **Open**.
-3. Confirm **Open** in the macOS security dialog.
+2. Open **Markv.app** normally from Applications.
 
 The current release requires macOS 14 or later. The prebuilt DMG targets Apple Silicon (`arm64`).
 
@@ -56,6 +56,14 @@ Type Markdown naturally in the editor. Common block prefixes convert automatical
 Use the image button to insert an image URL or upload a local image. Uploaded, dropped, and pasted images are copied into an `IMG` folder beside the current Markdown document. MarkV automatically resolves duplicate file names and inserts a portable relative Markdown path instead of embedding base64 data.
 
 Right-click a file in the library to export it as PDF, copy its full path, or move it to the Trash after confirmation.
+
+### Optional AI extension
+
+Enable AI in Settings and configure an OpenAI-compatible Base URL, model name, and optional API key. The key is stored in macOS Keychain rather than UserDefaults or Markdown files.
+
+Select text and use the sparkle menu to improve writing, fix spelling and grammar, shorten, lengthen, or provide a custom instruction. MarkV shows the original and proposed revision before you choose Replace, Insert Below, Try Again, or Discard. Type `/` in an empty paragraph to open the AI content-generation prompt.
+
+The integration uses the OpenAI-compatible [Chat Completions](https://developers.openai.com/api/reference/cli/resources/chat/subresources/completions) request shape. Custom remote endpoints must use HTTPS; HTTP is limited to localhost services.
 
 ### Keyboard shortcuts
 
@@ -90,6 +98,16 @@ open dist/Markv.app
 
 The build script creates `dist/Markv.app`, generates the application icon, and applies an ad-hoc local signature.
 
+Maintainers with a Developer ID certificate and a `notarytool` Keychain profile can create a signed, notarized, and stapled DMG with:
+
+```bash
+MARKV_SIGN_IDENTITY="Developer ID Application: Your Name (TEAM_ID)" \
+MARKV_NOTARY_PROFILE="markv-notary" \
+./scripts/build-notarized-dmg.sh
+```
+
+The notarization profile is read from macOS Keychain; no Apple credentials are stored in the repository or build scripts.
+
 Run MarkV directly with Swift Package Manager:
 
 ```bash
@@ -116,7 +134,7 @@ MarkV has no third-party runtime dependencies. Markdown parsing, WYSIWYG synchro
 
 ## Privacy
 
-MarkV reads and writes only the files you explicitly open. Search indexing stays in memory on your Mac. The application does not send document content, usage data, or analytics to any server.
+MarkV reads and writes only the files you explicitly open. Search indexing stays in memory on your Mac. The application does not collect analytics or upload documents by default. The optional AI extension is disabled by default; when you invoke it, only the selected text or AI prompt needed for that request is sent to the endpoint you configured.
 
 ## Contributing
 

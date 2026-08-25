@@ -81,6 +81,15 @@ struct MarkvApp: App {
                 Button(model.text("Insert Table")) { model.performEditorAction(.table) }
                 Button(model.text("Horizontal Rule")) { model.performEditorAction(.horizontalRule) }
             }
+
+            CommandMenu(model.text("AI")) {
+                ForEach(AIEditAction.allCases) { action in
+                    Button(model.text(action.titleKey)) {
+                        model.beginAISelectionEdit(action)
+                    }
+                    .disabled(!model.aiEnabled || model.currentFile == nil)
+                }
+            }
         }
     }
 }
