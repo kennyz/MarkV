@@ -22,6 +22,8 @@ MarkV is a focused, native Markdown reader and WYSIWYG editor for macOS. It comb
 - Khaki and white reading themes
 - English and Simplified Chinese interface languages
 - Optional OpenAI-compatible AI editing with custom endpoint and model settings
+- Built-in GitHub release checks with a quiet update indicator
+- Native Markdown file association with an in-app default-application setting
 - Focus mode and typewriter mode
 - Word, character, line, and reading-time statistics
 - Vector-based, paginated A4 PDF export

@@ -178,25 +178,38 @@ final class AppModel: ObservableObject {
     @Published var aiPromptContext: AIPromptContext?
     @Published private(set) var aiRevision: AIRevision?
     @Published private(set) var aiIsWorking = false
+    @Published private(set) var updateStatus: UpdateStatus = .idle
+    @Published private(set) var isDefaultMarkdownApplication = false
+    @Published private(set) var isChangingMarkdownAssociation = false
     @Published var editorCommand: EditorCommand?
 
     private let defaults: UserDefaults
     private let aiKeyStore: any AIAPIKeyStoring
     private let aiService: any AICompleting
+    private let updateService: any UpdateChecking
+    private let markdownFileAssociation: any MarkdownFileAssociationManaging
+    let appVersion: String
     private var previewCache: [String: String] = [:]
     private var pendingAIEditAction: AIEditAction?
     private var lastAIRequest: AIRequestContext?
     private var aiTask: Task<Void, Never>?
+    private var didRequestAutomaticUpdateCheck = false
 
     init(
         defaults: UserDefaults = .standard,
         restoreLastFolder: Bool = true,
         aiKeyStore: any AIAPIKeyStoring = AIKeychainStore(),
-        aiService: any AICompleting = AIService()
+        aiService: any AICompleting = AIService(),
+        updateService: any UpdateChecking = GitHubUpdateService(),
+        markdownFileAssociation: any MarkdownFileAssociationManaging = MarkdownFileAssociationManager(),
+        appVersion: String = AppVersion.current()
     ) {
         self.defaults = defaults
         self.aiKeyStore = aiKeyStore
         self.aiService = aiService
+        self.updateService = updateService
+        self.markdownFileAssociation = markdownFileAssociation
+        self.appVersion = appVersion
         self.appearanceTheme = AppearanceTheme(
             rawValue: defaults.string(forKey: Keys.appearanceTheme) ?? ""
         ) ?? .khaki
@@ -256,6 +269,57 @@ final class AppModel: ObservableObject {
 
     func text(_ english: String) -> String {
         appLanguage.text(english)
+    }
+
+    func checkForUpdatesAutomatically() async {
+        guard !didRequestAutomaticUpdateCheck else { return }
+        didRequestAutomaticUpdateCheck = true
+        await checkForUpdates()
+    }
+
+    func refreshMarkdownFileAssociation() {
+        isDefaultMarkdownApplication = markdownFileAssociation.isDefaultApplication()
+    }
+
+    func setAsDefaultMarkdownApplication() async {
+        guard !isChangingMarkdownAssociation else { return }
+        isChangingMarkdownAssociation = true
+        defer { isChangingMarkdownAssociation = false }
+
+        do {
+            try await markdownFileAssociation.setAsDefaultApplication()
+            refreshMarkdownFileAssociation()
+            if !isDefaultMarkdownApplication {
+                errorMessage = text("macOS did not change the Markdown default application.")
+            }
+        } catch {
+            errorMessage = localizedFormat(
+                "Markv could not change the Markdown file association: %@",
+                error.localizedDescription
+            )
+            refreshMarkdownFileAssociation()
+        }
+    }
+
+    func checkForUpdates() async {
+        guard updateStatus != .checking else { return }
+        updateStatus = .checking
+        do {
+            let release = try await updateService.latestRelease()
+            guard let current = SemanticVersion(appVersion),
+                  let latest = SemanticVersion(release.version) else {
+                updateStatus = .failed
+                return
+            }
+            updateStatus = latest > current ? .available(release) : .upToDate
+        } catch {
+            updateStatus = .failed
+        }
+    }
+
+    func openAvailableUpdate() {
+        guard case .available(let release) = updateStatus else { return }
+        NSWorkspace.shared.open(release.pageURL)
     }
 
     func localizedFormat(_ english: String, _ arguments: CVarArg...) -> String {

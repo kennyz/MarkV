@@ -89,6 +89,9 @@ struct ContentView: View {
             isRenamingCurrentFile = false
             isFileNameFieldFocused = false
         }
+        .task {
+            await model.checkForUpdatesAutomatically()
+        }
         .alert("Markv", isPresented: Binding(
             get: { model.errorMessage != nil },
             set: { if !$0 { model.errorMessage = nil } }
@@ -150,26 +153,47 @@ struct ContentView: View {
             sidebarFooter
         }
         .background(palette.sidebarEnd)
+        .overlay(alignment: .bottomTrailing) {
+            versionButton
+                .padding(.trailing, 44)
+                .padding(.bottom, 7)
+        }
     }
 
     private var sidebarTopActions: some View {
-        HStack(spacing: 4) {
-            sidebarActionButton("doc.badge.plus", help: model.text("New Document (⌘N)")) {
+        HStack(spacing: 6) {
+            sidebarActionButton(
+                "square.and.pencil",
+                help: model.text("New Document (⌘N)"),
+                prominent: true,
+                iconSize: 16,
+                controlSize: 34
+            ) {
                 model.createEmptyDocument()
             }
 
-            sidebarActionButton("doc", help: model.text("Open File (⌘O)")) {
+            sidebarActionButton(
+                "doc",
+                help: model.text("Open File (⌘O)"),
+                iconSize: 16,
+                controlSize: 34
+            ) {
                 model.chooseFile()
             }
 
-            sidebarActionButton("folder", help: model.text("Open Folder (⇧⌘O)")) {
+            sidebarActionButton(
+                "folder",
+                help: model.text("Open Folder (⇧⌘O)"),
+                iconSize: 16,
+                controlSize: 34
+            ) {
                 model.chooseDirectory()
             }
         }
-        .foregroundStyle(ink.opacity(0.68))
-        .padding(.leading, 70)
+        .padding(.leading, 10)
         .padding(.trailing, 10)
-        .frame(height: 30)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 36)
     }
 
     private var sidebarTabPicker: some View {
@@ -250,18 +274,90 @@ struct ContentView: View {
         .frame(height: 42)
     }
 
+    private var versionButton: some View {
+        Button {
+            if case .available = model.updateStatus {
+                model.openAvailableUpdate()
+            } else {
+                Task { await model.checkForUpdates() }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                if model.updateStatus == .checking {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .scaleEffect(0.55)
+                        .frame(width: 8, height: 8)
+                } else if case .available = model.updateStatus {
+                    Circle()
+                        .fill(accent)
+                        .frame(width: 5, height: 5)
+                }
+
+                Text(versionLabel)
+                    .font(.system(size: 9, weight: .medium, design: .rounded))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(versionLabelColor)
+            .frame(width: 48, height: 28, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .fixedSize(horizontal: true, vertical: true)
+        .layoutPriority(1)
+        .help(versionHelp)
+        .accessibilityLabel(versionHelp)
+    }
+
+    private var versionLabel: String {
+        return "v\(model.appVersion)"
+    }
+
+    private var versionLabelColor: Color {
+        if case .available = model.updateStatus { return accent }
+        return ink.opacity(0.34)
+    }
+
+    private var versionHelp: String {
+        switch model.updateStatus {
+        case .idle:
+            model.text("Check for Updates")
+        case .checking:
+            model.text("Checking for Updates…")
+        case .upToDate:
+            model.localizedFormat("MarkV %@ is up to date", model.appVersion)
+        case .available(let release):
+            model.localizedFormat("Open the %@ release page", release.version)
+        case .failed:
+            model.text("Update check failed. Click to try again.")
+        }
+    }
+
     private func sidebarActionButton(
         _ symbol: String,
         help: String,
+        prominent: Bool = false,
+        iconSize: CGFloat = 13,
+        controlSize: CGFloat = 30,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 13, weight: .medium))
-                .frame(width: 30, height: 28)
+                .font(.system(size: iconSize, weight: prominent ? .semibold : .medium))
+                .frame(width: controlSize, height: controlSize - 2)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .foregroundStyle(prominent ? paper : ink.opacity(0.72))
+        .background(
+            prominent ? accent : Color.clear,
+            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+        )
+        .shadow(
+            color: prominent ? accent.opacity(0.18) : Color.clear,
+            radius: 3,
+            y: 1
+        )
         .help(help)
     }
 
@@ -1174,6 +1270,40 @@ private struct AppearanceSettingsView: View {
 
             Divider()
 
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(model.text("Markdown Files"))
+                            .font(.custom("AvenirNext-DemiBold", size: 11))
+                        Text(model.text("Open .md files with MarkV by default"))
+                            .font(.custom("AvenirNext-Regular", size: 9))
+                            .foregroundStyle(ink.opacity(0.45))
+                    }
+
+                    Spacer()
+
+                    if model.isDefaultMarkdownApplication {
+                        Label(model.text("Default App"), systemImage: "checkmark.circle.fill")
+                            .font(.custom("AvenirNext-DemiBold", size: 10))
+                            .foregroundStyle(accent)
+                    } else if model.isChangingMarkdownAssociation {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Button(model.text("Set as Default")) {
+                            Task { await model.setAsDefaultMarkdownApplication() }
+                        }
+                        .controlSize(.small)
+                    }
+                }
+
+                Text(model.text("macOS may ask for confirmation before changing this setting."))
+                    .font(.custom("AvenirNext-Regular", size: 9))
+                    .foregroundStyle(ink.opacity(0.42))
+            }
+
+            Divider()
+
             VStack(alignment: .leading, spacing: 9) {
                 HStack {
                     VStack(alignment: .leading, spacing: 1) {
@@ -1219,6 +1349,9 @@ private struct AppearanceSettingsView: View {
         .padding(18)
         .frame(width: 380)
         .background(Color.white)
+        .onAppear {
+            model.refreshMarkdownFileAssociation()
+        }
     }
 
     private func aiSettingField<Content: View>(
