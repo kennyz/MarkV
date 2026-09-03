@@ -33,10 +33,12 @@ MarkV is a focused, native Markdown reader and WYSIWYG editor for macOS. It comb
 
 Download the latest Apple Silicon DMG from the [GitHub Releases page](../../releases/latest).
 
-The downloadable build is signed with a Developer ID Application certificate and notarized by Apple. To install:
+The v0.7.0 downloadable build is ad-hoc signed and is not notarized by Apple. To install:
 
 1. Open the DMG and drag **Markv.app** to **Applications**.
-2. Open **Markv.app** normally from Applications.
+2. The first time you launch it, Control-click **Markv.app**, choose **Open**, then confirm **Open**.
+
+Because this build is not notarized, macOS may require the Control-click launch flow above. Future builds made with a Developer ID certificate can use the notarized release workflow documented below.
 
 The current release requires macOS 14 or later. The prebuilt DMG targets Apple Silicon (`arm64`).
 
