@@ -202,6 +202,7 @@ final class AppModel: ObservableObject {
     @Published var editorCommand: EditorCommand?
 
     private let defaults: UserDefaults
+    private let fileAccess: SecurityScopedFileAccess
     private let aiKeyStore: any AIAPIKeyStoring
     private let aiService: any AICompleting
     private let updateService: any UpdateChecking
@@ -223,6 +224,7 @@ final class AppModel: ObservableObject {
         appVersion: String = AppVersion.current()
     ) {
         self.defaults = defaults
+        self.fileAccess = SecurityScopedFileAccess(defaults: defaults)
         self.aiKeyStore = aiKeyStore
         self.aiService = aiService
         self.updateService = updateService
@@ -251,22 +253,32 @@ final class AppModel: ObservableObject {
         self.aiModel = defaults.string(forKey: Keys.aiModel) ?? ""
         self.aiAPIKey = AppDistribution.supportsAI ? ((try? aiKeyStore.loadAPIKey()) ?? "") : ""
 
+        // Old non-sandboxed path-only preferences must not cause a permission alert at launch.
+        if restoreLastFolder, let path = defaults.string(forKey: Keys.lastFolder) {
+            let folder = accessibleURL(URL(fileURLWithPath: path, isDirectory: true))
+            if Self.isDirectory(folder),
+               !AppDistribution.isAppStore || (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) != nil {
+                currentFolder = folder
+                refreshFiles()
+            }
+        }
+
         let stored = defaults.stringArray(forKey: Keys.recentFiles) ?? []
         self.recentFiles = Self.normalizedRecents(
-            stored.map { URL(fileURLWithPath: $0) }
+            stored.map { accessibleURL(URL(fileURLWithPath: $0)) }
         ).filter { FileManager.default.fileExists(atPath: $0.path) }
         self.previewCache = Dictionary(uniqueKeysWithValues: recentFiles.map { url in
             (url.standardizedFileURL.path, Self.readPreview(at: url))
         })
 
-        if restoreLastFolder,
-           let path = defaults.string(forKey: Keys.lastFolder) {
-            let folder = URL(fileURLWithPath: path, isDirectory: true)
-            if Self.isDirectory(folder) {
-                currentFolder = folder
-                refreshFiles()
-            }
-        }
+    }
+
+    private func accessibleURL(_ url: URL, remember: Bool = false) -> URL {
+        AppDistribution.isAppStore ? fileAccess.access(url, remember: remember) : url
+    }
+
+    private func canBrowseFolder(_ url: URL) -> Bool {
+        !AppDistribution.isAppStore || (try? FileManager.default.contentsOfDirectory(atPath: url.path)) != nil
     }
 
     private static func clampedFontSize(_ size: Double, range: ClosedRange<Double>, fallback: Double) -> Double {
@@ -417,6 +429,7 @@ final class AppModel: ObservableObject {
     }
 
     func openDirectory(_ folder: URL) {
+        let folder = accessibleURL(folder, remember: true)
         guard Self.isDirectory(folder) else {
             errorMessage = text("That folder is no longer available.")
             return
@@ -606,6 +619,7 @@ final class AppModel: ObservableObject {
     }
 
     func openRecent(_ url: URL) {
+        let url = accessibleURL(url, remember: true)
         guard FileManager.default.fileExists(atPath: url.path) else {
             removeRecent(url)
             errorMessage = text("That recent file is no longer available.")
@@ -613,8 +627,8 @@ final class AppModel: ObservableObject {
         }
         guard confirmDocumentTransition() else { return }
 
-        let parent = url.deletingLastPathComponent()
-        if parent.standardizedFileURL != currentFolder?.standardizedFileURL {
+        let parent = accessibleURL(url.deletingLastPathComponent())
+        if parent.standardizedFileURL != currentFolder?.standardizedFileURL, canBrowseFolder(parent) {
             currentFolder = parent
             defaults.set(parent.path, forKey: Keys.lastFolder)
             refreshFiles()
@@ -1001,12 +1015,15 @@ final class AppModel: ObservableObject {
             return false
         }
 
+        url = accessibleURL(url, remember: true)
         do {
             try "".write(to: url, atomically: true, encoding: .utf8)
-            let parent = url.deletingLastPathComponent()
-            currentFolder = parent
-            defaults.set(parent.path, forKey: Keys.lastFolder)
-            refreshFiles()
+            let parent = accessibleURL(url.deletingLastPathComponent())
+            if canBrowseFolder(parent) {
+                currentFolder = parent
+                defaults.set(parent.path, forKey: Keys.lastFolder)
+                refreshFiles()
+            }
             loadFile(url)
             return true
         } catch {
@@ -1047,6 +1064,7 @@ final class AppModel: ObservableObject {
     }
 
     private func loadFile(_ url: URL) {
+        let url = accessibleURL(url, remember: true)
         guard Self.isMarkdownFile(url) else {
             errorMessage = text("Markv can open Markdown files only.")
             return

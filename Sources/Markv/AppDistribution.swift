@@ -2,9 +2,11 @@ import Foundation
 
 enum AppDistribution {
     #if MARKV_APP_STORE
+    static let isAppStore = true
     static let supportsAI = false
     static let supportsGitHubUpdates = false
     #else
+    static let isAppStore = false
     static let supportsAI = true
     static let supportsGitHubUpdates = true
     #endif
