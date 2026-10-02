@@ -12,6 +12,7 @@ struct MarkvApp: App {
                 .preferredColorScheme(.light)
         }
         .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1280, height: 820)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button(model.text("New Document…")) {
@@ -46,6 +47,18 @@ struct MarkvApp: App {
                 }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
                 .disabled(model.currentFile == nil)
+            }
+
+            CommandGroup(before: .sidebar) {
+                Button(model.text("Increase Font Size")) { model.increaseFontSize() }
+                    .keyboardShortcut("=", modifiers: .command)
+                    .disabled(model.editorFontSize >= AppModel.editorFontSizeRange.upperBound)
+                Button(model.text("Decrease Font Size")) { model.decreaseFontSize() }
+                    .keyboardShortcut("-", modifiers: .command)
+                    .disabled(model.editorFontSize <= AppModel.editorFontSizeRange.lowerBound)
+                Button(model.text("Reset Font Size")) { model.resetEditorFontSize() }
+                    .keyboardShortcut("0", modifiers: .command)
+                Divider()
             }
 
             CommandGroup(after: .sidebar) {

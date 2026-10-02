@@ -14,7 +14,11 @@ struct SemanticVersion: Comparable, Equatable, Sendable {
               parts.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) }) else {
             return nil
         }
-        components = parts.map { Int($0) ?? 0 }
+        var normalized = parts.map { Int($0) ?? 0 }
+        while normalized.count > 1 && normalized.last == 0 {
+            normalized.removeLast()
+        }
+        components = normalized
     }
 
     static func < (lhs: SemanticVersion, rhs: SemanticVersion) -> Bool {

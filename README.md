@@ -33,12 +33,12 @@ MarkV is a focused, native Markdown reader and WYSIWYG editor for macOS. It comb
 
 Download the latest Apple Silicon DMG from the [GitHub Releases page](../../releases/latest).
 
-The v0.7.0 downloadable build is ad-hoc signed and is not notarized by Apple. To install:
+The v1.7.1 downloadable build is ad-hoc signed and is not notarized by Apple. To install:
 
 1. Open the DMG and drag **Markv.app** to **Applications**.
-2. The first time you launch it, Control-click **Markv.app**, choose **Open**, then confirm **Open**.
+2. Launch **Markv.app** from Applications. If macOS blocks the first launch, open **System Settings > Privacy & Security > Open Anyway**, then confirm **Open**.
 
-Because this build is not notarized, macOS may require the Control-click launch flow above. Future builds made with a Developer ID certificate can use the notarized release workflow documented below.
+Because this build is not notarized, macOS may require the [first-launch confirmation](https://support.apple.com/102445) above. Future builds made with a Developer ID certificate can use the notarized release workflow documented below.
 
 The current release requires macOS 14 or later. The prebuilt DMG targets Apple Silicon (`arm64`).
 
@@ -83,6 +83,11 @@ The integration uses the OpenAI-compatible [Chat Completions](https://developers
 | Inline code | `Command-Backtick` |
 | Focus mode | `Option-Command-8` |
 | Typewriter mode | `Option-Command-9` |
+| Increase document font size | `Command-=` |
+| Decrease document font size | `Command--` |
+| Reset document font size | `Command-0` |
+
+Settings includes separate font-size controls for document text and the file sidebar. Changes take effect immediately and are remembered for future sessions.
 
 ## Build from source
 

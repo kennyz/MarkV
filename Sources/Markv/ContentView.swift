@@ -231,7 +231,7 @@ struct ContentView: View {
 
             TextField(model.text("Search folder"), text: $folderSearchQuery)
                 .textFieldStyle(.plain)
-                .font(.custom("AvenirNext-Regular", size: 11))
+                .font(.custom("AvenirNext-Regular", size: CGFloat(model.sidebarFontSize - 2)))
 
             if !folderSearchQuery.isEmpty {
                 Button {
@@ -486,7 +486,7 @@ struct ContentView: View {
                 Spacer()
                 if !folderSearchQuery.isEmpty {
                     Text("\(visibleFiles.count)")
-                        .font(.custom("AvenirNext-Medium", size: 9))
+                        .font(.custom("AvenirNext-Medium", size: CGFloat(model.sidebarFontSize - 4)))
                         .foregroundStyle(ink.opacity(0.36))
                 }
                 if model.currentFolder != nil {
@@ -507,7 +507,7 @@ struct ContentView: View {
                     model.chooseDirectory()
                 } label: {
                     Label(model.text("Choose a folder"), systemImage: "folder")
-                        .font(.custom("AvenirNext-Medium", size: 12))
+                        .font(.custom("AvenirNext-Medium", size: CGFloat(model.sidebarFontSize - 1)))
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(10)
                 }
@@ -515,7 +515,7 @@ struct ContentView: View {
                 .background(ink.opacity(0.055), in: RoundedRectangle(cornerRadius: 8))
             } else if visibleFiles.isEmpty {
                 Text(model.text(model.files.isEmpty ? "No Markdown files here" : "No matching documents"))
-                    .font(.custom("AvenirNext-Regular", size: 12))
+                    .font(.custom("AvenirNext-Regular", size: CGFloat(model.sidebarFontSize - 1)))
                     .foregroundStyle(ink.opacity(0.48))
                     .padding(.horizontal, 8)
                     .padding(.vertical, 5)
@@ -537,7 +537,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 7) {
             if model.recentFiles.isEmpty {
                 Text(model.text("No recently opened files"))
-                    .font(.custom("AvenirNext-Regular", size: 12))
+                    .font(.custom("AvenirNext-Regular", size: CGFloat(model.sidebarFontSize - 1)))
                     .foregroundStyle(ink.opacity(0.48))
                     .padding(.horizontal, 8)
                     .padding(.vertical, 5)
@@ -562,7 +562,7 @@ struct ContentView: View {
 
     private func sectionLabel(_ text: String) -> some View {
         Text(text)
-            .font(.custom("AvenirNext-DemiBold", size: 9))
+            .font(.custom("AvenirNext-DemiBold", size: CGFloat(model.sidebarFontSize - 4)))
             .tracking(1.2)
             .foregroundStyle(ink.opacity(0.45))
             .lineLimit(1)
@@ -579,11 +579,11 @@ struct ContentView: View {
             HStack(spacing: 0) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title)
-                        .font(.custom(selected ? "AvenirNext-DemiBold" : "AvenirNext-Medium", size: 12))
+                        .font(.custom(selected ? "AvenirNext-DemiBold" : "AvenirNext-Medium", size: CGFloat(model.sidebarFontSize)))
                         .foregroundStyle(ink.opacity(selected ? 1 : 0.78))
                         .lineLimit(1)
                     Text(preview.isEmpty ? model.text("Empty document") : preview)
-                        .font(.custom("AvenirNext-Regular", size: 10))
+                        .font(.custom("AvenirNext-Regular", size: CGFloat(model.sidebarFontSize - 2)))
                         .foregroundStyle(ink.opacity(0.32))
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
@@ -594,7 +594,7 @@ struct ContentView: View {
                 }
             }
             .padding(.horizontal, 8)
-            .padding(.vertical, 8)
+            .padding(.vertical, 9)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -602,6 +602,7 @@ struct ContentView: View {
             selected ? paper.opacity(0.88) : Color.clear,
             in: RoundedRectangle(cornerRadius: 8, style: .continuous)
         )
+        .help(title)
     }
 
     @ViewBuilder
@@ -1031,6 +1032,7 @@ struct ContentView: View {
             markdown: model.documentText,
             documentID: model.currentFile?.path ?? "untitled",
             theme: model.appearanceTheme,
+            fontSize: model.editorFontSize,
             baseURL: model.currentFile?.deletingLastPathComponent(),
             focusMode: model.focusMode,
             typewriterMode: model.typewriterMode,
@@ -1206,10 +1208,10 @@ private struct MarkvPalette {
     init(theme: AppearanceTheme) {
         switch theme {
         case .khaki:
-            paper = Color(red: 0.988, green: 0.981, blue: 0.959)
-            sidebarStart = Color(red: 0.952, green: 0.939, blue: 0.900)
-            sidebarEnd = Color(red: 0.973, green: 0.963, blue: 0.935)
-            editor = Color(red: 0.973, green: 0.963, blue: 0.937)
+            paper = Color(red: 0.992, green: 0.988, blue: 0.976)
+            sidebarStart = Color(red: 0.976, green: 0.970, blue: 0.950)
+            sidebarEnd = Color(red: 0.987, green: 0.982, blue: 0.968)
+            editor = Color(red: 0.987, green: 0.982, blue: 0.969)
         case .white:
             paper = .white
             sidebarStart = Color(red: 0.969, green: 0.969, blue: 0.958)
@@ -1226,6 +1228,19 @@ private struct AppearanceSettingsView: View {
     private let accent = Color(red: 0.73, green: 0.25, blue: 0.16)
 
     var body: some View {
+        ScrollView {
+            settingsContent
+        }
+        .scrollIndicators(.hidden)
+        .frame(width: 380)
+        .frame(maxHeight: 650)
+        .background(Color.white)
+        .onAppear {
+            model.refreshMarkdownFileAssociation()
+        }
+    }
+
+    private var settingsContent: some View {
         VStack(alignment: .leading, spacing: 15) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(model.text("Appearance"))
@@ -1239,6 +1254,31 @@ private struct AppearanceSettingsView: View {
                 ForEach(AppearanceTheme.allCases) { theme in
                     themeCard(theme)
                 }
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text(model.text("Font Size"))
+                        .font(.custom("AvenirNext-DemiBold", size: 11))
+                    Spacer()
+                    Button(model.text("Reset to Default")) { model.resetFontSizes() }
+                        .controlSize(.small)
+                }
+                fontSizeControl(
+                    "Document text",
+                    value: Binding(get: { model.editorFontSize }, set: { model.setEditorFontSize($0) }),
+                    range: AppModel.editorFontSizeRange
+                )
+                fontSizeControl(
+                    "File sidebar",
+                    value: Binding(get: { model.sidebarFontSize }, set: { model.setSidebarFontSize($0) }),
+                    range: AppModel.sidebarFontSizeRange
+                )
+                Text(model.text("Document shortcuts: ⌘= larger, ⌘− smaller, ⌘0 reset"))
+                    .font(.custom("AvenirNext-Regular", size: 10))
+                    .foregroundStyle(ink.opacity(0.5))
             }
 
             Divider()
@@ -1347,10 +1387,21 @@ private struct AppearanceSettingsView: View {
         }
         .foregroundStyle(ink)
         .padding(18)
-        .frame(width: 380)
-        .background(Color.white)
-        .onAppear {
-            model.refreshMarkdownFileAssociation()
+    }
+
+    private func fontSizeControl(_ label: String, value: Binding<Double>, range: ClosedRange<Double>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(model.text(label))
+                Spacer()
+                Text("\(Int(value.wrappedValue))")
+                    .monospacedDigit()
+            }
+            .font(.custom("AvenirNext-Medium", size: 11))
+            Slider(value: value, in: range, step: 1)
+                .tint(accent)
+                .accessibilityLabel(model.text(label))
+                .accessibilityValue("\(Int(value.wrappedValue))")
         }
     }
 

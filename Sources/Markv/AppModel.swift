@@ -126,6 +126,8 @@ final class AppModel: ObservableObject {
         static let recentFiles = "markv.recentFiles"
         static let lastFolder = "markv.lastFolder"
         static let appearanceTheme = "markv.appearanceTheme"
+        static let editorFontSize = "markv.editorFontSize"
+        static let sidebarFontSize = "markv.sidebarFontSize"
         static let focusMode = "markv.focusMode"
         static let typewriterMode = "markv.typewriterMode"
         static let appLanguage = "markv.appLanguage"
@@ -143,6 +145,17 @@ final class AppModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var appearanceTheme: AppearanceTheme {
         didSet { defaults.set(appearanceTheme.rawValue, forKey: Keys.appearanceTheme) }
+    }
+    static let defaultEditorFontSize = 17.0
+    static let defaultSidebarFontSize = 14.0
+    static let editorFontSizeRange = 12.0...30.0
+    static let sidebarFontSizeRange = 11.0...20.0
+
+    @Published private(set) var editorFontSize: Double {
+        didSet { defaults.set(editorFontSize, forKey: Keys.editorFontSize) }
+    }
+    @Published private(set) var sidebarFontSize: Double {
+        didSet { defaults.set(sidebarFontSize, forKey: Keys.sidebarFontSize) }
     }
     @Published var focusMode: Bool {
         didSet { defaults.set(focusMode, forKey: Keys.focusMode) }
@@ -213,6 +226,16 @@ final class AppModel: ObservableObject {
         self.appearanceTheme = AppearanceTheme(
             rawValue: defaults.string(forKey: Keys.appearanceTheme) ?? ""
         ) ?? .khaki
+        self.editorFontSize = Self.clampedFontSize(
+            (defaults.object(forKey: Keys.editorFontSize) as? Double) ?? Self.defaultEditorFontSize,
+            range: Self.editorFontSizeRange,
+            fallback: Self.defaultEditorFontSize
+        )
+        self.sidebarFontSize = Self.clampedFontSize(
+            (defaults.object(forKey: Keys.sidebarFontSize) as? Double) ?? Self.defaultSidebarFontSize,
+            range: Self.sidebarFontSizeRange,
+            fallback: Self.defaultSidebarFontSize
+        )
         self.focusMode = defaults.bool(forKey: Keys.focusMode)
         self.typewriterMode = defaults.bool(forKey: Keys.typewriterMode)
         self.appLanguage = AppLanguage(
@@ -239,6 +262,28 @@ final class AppModel: ObservableObject {
                 refreshFiles()
             }
         }
+    }
+
+    private static func clampedFontSize(_ size: Double, range: ClosedRange<Double>, fallback: Double) -> Double {
+        guard size.isFinite else { return fallback }
+        return min(max(size.rounded(), range.lowerBound), range.upperBound)
+    }
+
+    func setEditorFontSize(_ size: Double) {
+        editorFontSize = Self.clampedFontSize(size, range: Self.editorFontSizeRange, fallback: Self.defaultEditorFontSize)
+    }
+
+    func setSidebarFontSize(_ size: Double) {
+        sidebarFontSize = Self.clampedFontSize(size, range: Self.sidebarFontSizeRange, fallback: Self.defaultSidebarFontSize)
+    }
+
+    func increaseFontSize() { setEditorFontSize(editorFontSize + 1) }
+    func decreaseFontSize() { setEditorFontSize(editorFontSize - 1) }
+    func resetEditorFontSize() { setEditorFontSize(Self.defaultEditorFontSize) }
+
+    func resetFontSizes() {
+        resetEditorFontSize()
+        setSidebarFontSize(Self.defaultSidebarFontSize)
     }
 
     nonisolated static func isMarkdownFile(_ url: URL) -> Bool {

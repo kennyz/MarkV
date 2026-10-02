@@ -166,6 +166,7 @@ struct MarkdownWebView: NSViewRepresentable {
     let markdown: String
     let documentID: String
     let theme: AppearanceTheme
+    let fontSize: Double
     let baseURL: URL?
     let focusMode: Bool
     let typewriterMode: Bool
@@ -214,6 +215,7 @@ struct MarkdownWebView: NSViewRepresentable {
             markdown: markdown,
             documentID: documentID,
             theme: theme.rawValue,
+            fontSize: fontSize,
             focusMode: focusMode,
             typewriterMode: typewriterMode,
             language: language.rawValue,
@@ -232,6 +234,7 @@ struct MarkdownWebView: NSViewRepresentable {
             markdown: markdown,
             documentID: documentID,
             theme: theme.rawValue,
+            fontSize: fontSize,
             focusMode: focusMode,
             typewriterMode: typewriterMode,
             language: language.rawValue,
@@ -258,6 +261,7 @@ struct MarkdownWebView: NSViewRepresentable {
             let markdown: String
             let documentID: String
             let theme: String
+            let fontSize: Double
             let focusMode: Bool
             let typewriterMode: Bool
             let language: String
@@ -381,14 +385,14 @@ struct MarkdownWebView: NSViewRepresentable {
                     state.markdown,
                     localImageBaseURL: state.baseURL
                 )
-                guard let payload = json([html, state.markdown, state.theme, state.focusMode, state.typewriterMode, state.language, state.aiEnabled]) else { return }
+                guard let payload = json([html, state.markdown, state.theme, state.focusMode, state.typewriterMode, state.language, state.aiEnabled, state.fontSize]) else { return }
                 webView.evaluateJavaScript("window.markvSetContent(...\(payload))") { _, _ in
                     completion?()
                 }
                 lastNativeMarkdown = state.markdown
                 lastWebMarkdown = nil
                 lastDocumentID = state.documentID
-            } else if let payload = json([state.theme, state.focusMode, state.typewriterMode, state.language, state.aiEnabled]) {
+            } else if let payload = json([state.theme, state.focusMode, state.typewriterMode, state.language, state.aiEnabled, state.fontSize]) {
                 webView.evaluateJavaScript("window.markvSetPresentation(...\(payload))") { _, _ in
                     completion?()
                 }
@@ -492,7 +496,7 @@ struct MarkdownWebView: NSViewRepresentable {
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: file: https: http: markv-image:">
       <style>
-        :root { color-scheme:light; --paper:#fcfaf5; --ink:#22231f; --muted:#72736d; --accent:#ba402a; --line:#e5dfd2; --inline:#f0ece2; --table:#f5f1e8; --quote:#5d5f58; }
+        :root { color-scheme:light; --paper:#fdfcf9; --ink:#22231f; --muted:#72736d; --accent:#ba402a; --line:#ebe7de; --inline:#f7f5f0; --table:#faf8f3; --quote:#5d5f58; }
         :root[data-theme="white"] { --paper:#fff; --ink:#222321; --muted:#737570; --line:#e8e8e3; --inline:#f3f3f0; --table:#f7f7f4; --quote:#60625d; }
         * { box-sizing:border-box; }
         html,body { margin:0; min-height:100%; background:var(--paper); }
@@ -502,7 +506,7 @@ struct MarkdownWebView: NSViewRepresentable {
         ::-webkit-scrollbar-thumb { background:transparent; border-radius:999px; }
         :hover::-webkit-scrollbar-thumb { background:rgba(114,115,109,.28); }
         ::-webkit-scrollbar-thumb:hover { background:rgba(114,115,109,.48); }
-        #editor { max-width:920px; min-height:100vh; margin:0 auto; padding:24px 56px 160px; font-size:17px; line-height:1.78; caret-color:var(--accent); outline:none; }
+        #editor { max-width:920px; min-height:100vh; margin:0 auto; padding:24px 56px 160px; font-size:var(--editor-font-size,17px); line-height:1.78; caret-color:var(--accent); outline:none; }
         #editor:empty::before { content:"Start writing…"; color:var(--muted); opacity:.45; pointer-events:none; }
         :root[data-language="zh"] #editor:empty::before { content:"开始写作…"; }
         #editor > * { transition:opacity .16s ease; }
@@ -545,7 +549,7 @@ struct MarkdownWebView: NSViewRepresentable {
           h1,h2,h3,h4,h5,h6 { break-after:avoid-page; }
           pre,blockquote,.table-wrap,img { break-inside:avoid-page; box-shadow:none; }
         }
-        @media(max-width:680px){ #editor{ padding:22px 30px 100px; font-size:16px; } h1{font-size:2.1em;} }
+        @media(max-width:680px){ #editor{ padding:22px 30px 100px; } h1{font-size:2.1em;} }
       </style>
     </head>
     <body>
@@ -562,21 +566,22 @@ struct MarkdownWebView: NSViewRepresentable {
         const maximumImportedImageBytes = 25 * 1024 * 1024;
         let pendingImageRange = null;
 
-        function markvSetPresentation(theme, focus, typewriter, language, enabledAI) {
+        function markvSetPresentation(theme, focus, typewriter, language, enabledAI, fontSize) {
           document.documentElement.dataset.theme = theme;
           document.documentElement.dataset.language = language || 'en';
+          document.documentElement.style.setProperty('--editor-font-size', `${Math.min(30, Math.max(12, Number(fontSize) || 17))}px`);
           document.body.classList.toggle('focus-mode', !!focus);
           typewriterMode = !!typewriter;
           aiEnabled = !!enabledAI;
           updateActiveBlock(false);
         }
 
-        function markvSetContent(html, markdown, theme, focus, typewriter, language, enabledAI) {
+        function markvSetContent(html, markdown, theme, focus, typewriter, language, enabledAI, fontSize) {
           applyingNative = true;
           pendingImageRange = null;
           pendingAISelectionRange = null;
           pendingAISlashBlock = null;
-          markvSetPresentation(theme, focus, typewriter, language, enabledAI);
+          markvSetPresentation(theme, focus, typewriter, language, enabledAI, fontSize);
           editor.innerHTML = html || '<p><br></p>';
           lastMarkdown = markdown;
           decorateDocument();
