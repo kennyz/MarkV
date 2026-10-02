@@ -39,6 +39,8 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         "Open File (⌘O)": "打开文档 (⌘O)",
         "Appearance Settings": "外观设置",
         "Check for Updates": "检查更新",
+        "Updates are managed by the App Store.": "更新由 App Store 管理。",
+        "Privacy Policy": "隐私政策",
         "Checking for Updates…": "正在检查更新…",
         "%@ available": "%@ 可更新",
         "MarkV %@ is up to date": "MarkV %@ 已是最新版本",

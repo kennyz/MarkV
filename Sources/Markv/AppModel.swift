@@ -168,6 +168,10 @@ final class AppModel: ObservableObject {
     }
     @Published var aiEnabled: Bool {
         didSet {
+            guard AppDistribution.supportsAI else {
+                if aiEnabled { aiEnabled = false }
+                return
+            }
             defaults.set(aiEnabled, forKey: Keys.aiEnabled)
             if !aiEnabled { cancelAIInteraction() }
         }
@@ -180,6 +184,7 @@ final class AppModel: ObservableObject {
     }
     @Published var aiAPIKey: String {
         didSet {
+            guard AppDistribution.supportsAI else { return }
             do {
                 try aiKeyStore.saveAPIKey(aiAPIKey)
             } catch {
@@ -241,10 +246,10 @@ final class AppModel: ObservableObject {
         self.appLanguage = AppLanguage(
             rawValue: defaults.string(forKey: Keys.appLanguage) ?? ""
         ) ?? .english
-        self.aiEnabled = defaults.bool(forKey: Keys.aiEnabled)
+        self.aiEnabled = AppDistribution.supportsAI && defaults.bool(forKey: Keys.aiEnabled)
         self.aiBaseURL = defaults.string(forKey: Keys.aiBaseURL) ?? "https://api.openai.com/v1"
         self.aiModel = defaults.string(forKey: Keys.aiModel) ?? ""
-        self.aiAPIKey = (try? aiKeyStore.loadAPIKey()) ?? ""
+        self.aiAPIKey = AppDistribution.supportsAI ? ((try? aiKeyStore.loadAPIKey()) ?? "") : ""
 
         let stored = defaults.stringArray(forKey: Keys.recentFiles) ?? []
         self.recentFiles = Self.normalizedRecents(
@@ -317,6 +322,7 @@ final class AppModel: ObservableObject {
     }
 
     func checkForUpdatesAutomatically() async {
+        guard AppDistribution.supportsGitHubUpdates else { return }
         guard !didRequestAutomaticUpdateCheck else { return }
         didRequestAutomaticUpdateCheck = true
         await checkForUpdates()
@@ -347,6 +353,7 @@ final class AppModel: ObservableObject {
     }
 
     func checkForUpdates() async {
+        guard AppDistribution.supportsGitHubUpdates else { return }
         guard updateStatus != .checking else { return }
         updateStatus = .checking
         do {
@@ -363,6 +370,7 @@ final class AppModel: ObservableObject {
     }
 
     func openAvailableUpdate() {
+        guard AppDistribution.supportsGitHubUpdates else { return }
         guard case .available(let release) = updateStatus else { return }
         NSWorkspace.shared.open(release.pageURL)
     }
@@ -651,6 +659,7 @@ final class AppModel: ObservableObject {
     }
 
     func beginAISelectionEdit(_ action: AIEditAction) {
+        guard AppDistribution.supportsAI else { return }
         guard aiEnabled else {
             errorMessage = text("Enable AI in Settings first.")
             return
@@ -666,7 +675,7 @@ final class AppModel: ObservableObject {
     }
 
     func handleAIEditorEvent(_ event: EditorAIEvent) {
-        guard aiEnabled else { return }
+        guard AppDistribution.supportsAI && aiEnabled else { return }
         switch event {
         case .slash:
             do {
@@ -770,6 +779,7 @@ final class AppModel: ObservableObject {
     }
 
     private func startAIRequest(_ context: AIRequestContext) {
+        guard AppDistribution.supportsAI && aiEnabled else { return }
         let configuration = aiConfiguration
         do {
             _ = try configuration.endpointURL()

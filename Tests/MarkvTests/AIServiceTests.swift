@@ -114,7 +114,7 @@ private struct FailingAIService: AICompleting {
     }
 }
 
-@Test @MainActor func aiSettingsPersistWithoutWritingAPIKeyToDefaults() {
+@Test(.enabled(if: AppDistribution.supportsAI)) @MainActor func aiSettingsPersistWithoutWritingAPIKeyToDefaults() {
     let suiteName = "MarkvAISettingsTests.\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suiteName)!
     defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -138,7 +138,7 @@ private struct FailingAIService: AICompleting {
     #expect(keyStore.value == "private-key")
 }
 
-@Test @MainActor func aiSelectionAndSlashResultsRequireUserApproval() async throws {
+@Test(.enabled(if: AppDistribution.supportsAI)) @MainActor func aiSelectionAndSlashResultsRequireUserApproval() async throws {
     let suiteName = "MarkvAIStateTests.\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suiteName)!
     defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -184,7 +184,7 @@ private func waitForAI(_ model: AppModel) async throws {
     #expect(!model.aiIsWorking)
 }
 
-@Test @MainActor func aiErrorsRedactConfiguredAPIKey() async throws {
+@Test(.enabled(if: AppDistribution.supportsAI)) @MainActor func aiErrorsRedactConfiguredAPIKey() async throws {
     let suiteName = "MarkvAIRedactionTests.\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suiteName)!
     defer { defaults.removePersistentDomain(forName: suiteName) }

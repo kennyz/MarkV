@@ -145,6 +145,8 @@ MarkV has no third-party runtime dependencies. Markdown parsing, WYSIWYG synchro
 
 MarkV reads and writes only the files you explicitly open. Search indexing stays in memory on your Mac. The application does not collect analytics or upload documents by default. The optional AI extension is disabled by default; when you invoke it, only the selected text or AI prompt needed for that request is sent to the endpoint you configured. Update checks contact GitHub, and remote images can contact their hosts. See the [Privacy Policy](PRIVACY.md) for details and your choices.
 
+The initial Mac App Store edition omits AI editing and GitHub update checks; updates are handled by the App Store. Store builds must use the `MARKV_APP_STORE` Swift compilation condition. `scripts/build-mas-package.sh` enables it automatically. For a local bundle built with the same feature restrictions, use `MARKV_APP_STORE_BUILD=1 ./scripts/build-app.sh`. The regular GitHub build continues to include optional AI editing and GitHub release checks.
+
 ## Contributing
 
 Issues and pull requests are welcome. Please run the full test suite before submitting a change and keep new behavior covered by focused regression tests.

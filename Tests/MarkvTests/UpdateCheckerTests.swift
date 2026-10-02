@@ -38,7 +38,7 @@ private struct FailingUpdateService: UpdateChecking {
     }
 }
 
-@Test @MainActor func updateCheckReportsNewerAndCurrentReleases() async {
+@Test(.enabled(if: AppDistribution.supportsGitHubUpdates)) @MainActor func updateCheckReportsNewerAndCurrentReleases() async {
     let newer = AppModel(
         restoreLastFolder: false,
         updateService: StubUpdateService(release: AppRelease(
@@ -65,7 +65,7 @@ private struct FailingUpdateService: UpdateChecking {
     #expect(current.updateStatus == .upToDate)
 }
 
-@Test @MainActor func updateCheckFailureDoesNotBecomeAnAppAlert() async {
+@Test(.enabled(if: AppDistribution.supportsGitHubUpdates)) @MainActor func updateCheckFailureDoesNotBecomeAnAppAlert() async {
     let model = AppModel(
         restoreLastFolder: false,
         updateService: FailingUpdateService(),

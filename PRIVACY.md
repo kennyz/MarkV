@@ -4,6 +4,8 @@ Effective date: October 2, 2026
 
 This policy applies to the MarkV macOS app, including MarkV - Markdown Editor on the Mac App Store. MarkV is a local-first Markdown editor maintained by the MarkV project.
 
+The initial Mac App Store edition (version 1.7.1) does not provide AI editing or GitHub version checks. Those features described below apply only to the separately distributed GitHub edition. The App Store edition receives updates through Apple's App Store.
+
 ## Local documents and settings
 
 Core editing does not require an account. Documents and imported local images are stored in locations you choose on your Mac. Folder browsing, document search, and PDF export are performed locally. MarkV does not operate a document storage or synchronization server. Files in a folder you synchronize with another service remain subject to that service's policies.

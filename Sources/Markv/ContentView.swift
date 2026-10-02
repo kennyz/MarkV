@@ -305,6 +305,7 @@ struct ContentView: View {
         .buttonStyle(.plain)
         .fixedSize(horizontal: true, vertical: true)
         .layoutPriority(1)
+        .disabled(!AppDistribution.supportsGitHubUpdates)
         .help(versionHelp)
         .accessibilityLabel(versionHelp)
     }
@@ -319,7 +320,10 @@ struct ContentView: View {
     }
 
     private var versionHelp: String {
-        switch model.updateStatus {
+        if !AppDistribution.supportsGitHubUpdates {
+            return model.text("Updates are managed by the App Store.")
+        }
+        return switch model.updateStatus {
         case .idle:
             model.text("Check for Updates")
         case .checking:
@@ -1342,6 +1346,7 @@ private struct AppearanceSettingsView: View {
                     .foregroundStyle(ink.opacity(0.42))
             }
 
+            #if !MARKV_APP_STORE
             Divider()
 
             VStack(alignment: .leading, spacing: 9) {
@@ -1384,6 +1389,7 @@ private struct AppearanceSettingsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            #endif
         }
         .foregroundStyle(ink)
         .padding(18)

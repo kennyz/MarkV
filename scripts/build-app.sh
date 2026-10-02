@@ -15,12 +15,18 @@ SIGN_STYLE="${MARKV_SIGN_STYLE:-developer-id}"
 export SWIFTPM_MODULECACHE_OVERRIDE="$BUILD_DIR/module-cache"
 export CLANG_MODULE_CACHE_PATH="$BUILD_DIR/module-cache"
 
+swift_flags=()
+if [[ "${MARKV_APP_STORE_BUILD:-0}" == "1" ]]; then
+  swift_flags+=(-Xswiftc -DMARKV_APP_STORE)
+fi
+
 swift build \
   --configuration release \
   --disable-sandbox \
-  --scratch-path "$BUILD_DIR"
+  --scratch-path "$BUILD_DIR" \
+  "${swift_flags[@]}"
 
-BIN_DIR="$(swift build --configuration release --disable-sandbox --scratch-path "$BUILD_DIR" --show-bin-path)"
+BIN_DIR="$(swift build --configuration release --disable-sandbox --scratch-path "$BUILD_DIR" "${swift_flags[@]}" --show-bin-path)"
 
 rm -rf "$APP_BUNDLE" "$ICONSET"
 mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources" "$ICONSET"

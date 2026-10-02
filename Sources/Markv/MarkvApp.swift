@@ -95,12 +95,20 @@ struct MarkvApp: App {
                 Button(model.text("Horizontal Rule")) { model.performEditorAction(.horizontalRule) }
             }
 
+            #if !MARKV_APP_STORE
             CommandMenu(model.text("AI")) {
                 ForEach(AIEditAction.allCases) { action in
                     Button(model.text(action.titleKey)) {
                         model.beginAISelectionEdit(action)
                     }
                     .disabled(!model.aiEnabled || model.currentFile == nil)
+                }
+            }
+            #endif
+
+            CommandGroup(after: .help) {
+                Button(model.text("Privacy Policy")) {
+                    NSWorkspace.shared.open(AppDistribution.privacyPolicyURL)
                 }
             }
         }
