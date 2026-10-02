@@ -143,7 +143,7 @@ MarkV has no third-party runtime dependencies. Markdown parsing, WYSIWYG synchro
 
 ## Privacy
 
-MarkV reads and writes only the files you explicitly open. Search indexing stays in memory on your Mac. The application does not collect analytics or upload documents by default. The optional AI extension is disabled by default; when you invoke it, only the selected text or AI prompt needed for that request is sent to the endpoint you configured.
+MarkV reads and writes only the files you explicitly open. Search indexing stays in memory on your Mac. The application does not collect analytics or upload documents by default. The optional AI extension is disabled by default; when you invoke it, only the selected text or AI prompt needed for that request is sent to the endpoint you configured. Update checks contact GitHub, and remote images can contact their hosts. See the [Privacy Policy](PRIVACY.md) for details and your choices.
 
 ## Contributing
 
