@@ -670,6 +670,18 @@ struct ContentView: View {
             documentHeader
             Divider().overlay(ink.opacity(0.1))
 
+            if model.hasExternalChanges {
+                HStack(spacing: 12) {
+                    Label(model.text("This document changed outside MarkV. Your unsaved edits have been kept."), systemImage: "exclamationmark.arrow.triangle.2.circlepath")
+                    Spacer()
+                    Button(model.text("Save a Copy…")) { model.chooseDocumentCopyDestination() }
+                    Button(model.text("Load Latest")) { model.confirmReloadCurrentDocument() }
+                }
+                .font(.system(size: 12))
+                .padding(12)
+                .background(accent.opacity(0.08))
+            }
+
             ZStack(alignment: .topTrailing) {
                 wysiwygEditor
                     .padding(
@@ -820,7 +832,7 @@ struct ContentView: View {
                     Button(model.localizedFormat("Heading %d", level)) { model.performEditorAction(.heading(level)) }
                 }
             } label: {
-                Label(model.text("Text"), systemImage: "textformat")
+                Label(model.editorBlockTitle, systemImage: "textformat")
                     .font(.custom("AvenirNext-Medium", size: 10))
                     .padding(.horizontal, 7)
                     .frame(height: 26)
@@ -1044,6 +1056,8 @@ struct ContentView: View {
             aiEnabled: model.aiEnabled,
             command: model.editorCommand,
             onChange: { model.updateDocument($0) },
+            onEditingBegan: { model.documentEditingBegan() },
+            onHeadingLevelChange: { model.updateActiveHeadingLevel($0) },
             onPDFExport: { model.handlePDFExportResult($0) },
             onImageImport: { payload in
                 model.importImageData(

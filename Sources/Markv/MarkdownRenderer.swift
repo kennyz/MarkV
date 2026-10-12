@@ -64,22 +64,32 @@ enum MarkdownRenderer {
 
             if let item = listItem(from: trimmed) {
                 let tag = item.ordered ? "ol" : "ul"
+                let listIndent = indentation(of: line)
                 var items: [String] = []
                 var containsTasks = false
                 while index < lines.count,
+                      indentation(of: lines[index]) == listIndent,
                       let next = listItem(from: lines[index].trimmingCharacters(in: .whitespaces)),
                       next.ordered == item.ordered {
+                    index += 1
+                    var indented: [String] = []
+                    while index < lines.count, indentation(of: lines[index]) > listIndent {
+                        indented.append(lines[index])
+                        index += 1
+                    }
+                    let childIndent = indented.map { indentation(of: $0) }.min() ?? 0
+                    let nested = render(indented.map { removingIndent($0, count: childIndent) }.joined(separator: "\n"), localImageBaseURL: localImageBaseURL)
                     if let task = taskItem(from: next.text) {
                         containsTasks = true
                         let checked = task.checked ? " checked" : ""
-                        items.append("<li class=\"task-item\"><input type=\"checkbox\"\(checked)> \(renderInline(task.text, localImageBaseURL: localImageBaseURL))</li>")
+                        items.append("<li class=\"task-item\"><input type=\"checkbox\"\(checked)> \(renderInline(task.text, localImageBaseURL: localImageBaseURL))\(nested)</li>")
                     } else {
-                        items.append("<li>\(renderInline(next.text, localImageBaseURL: localImageBaseURL))</li>")
+                        items.append("<li>\(renderInline(next.text, localImageBaseURL: localImageBaseURL))\(nested)</li>")
                     }
-                    index += 1
                 }
                 let listClass = containsTasks ? " class=\"task-list\"" : ""
-                output.append("<\(tag)\(listClass)>\(items.joined())</\(tag)>")
+                let start = item.number.map { $0 != 1 ? " start=\"\($0)\"" : "" } ?? ""
+                output.append("<\(tag)\(listClass)\(start)>\(items.joined())</\(tag)>")
                 continue
             }
 
@@ -221,12 +231,22 @@ enum MarkdownRenderer {
         return (hashes.count, String(line.dropFirst(hashes.count + 1)))
     }
 
-    private static func listItem(from line: String) -> (ordered: Bool, text: String)? {
+    private static func indentation(of line: String) -> Int {
+        line.prefix { $0 == " " || $0 == "\t" }.reduce(0) { $0 + ($1 == "\t" ? 4 : 1) }
+    }
+
+    private static func removingIndent(_ line: String, count: Int) -> String {
+        let expanded = line.replacingOccurrences(of: "\t", with: "    ")
+        return String(expanded.dropFirst(count))
+    }
+
+    private static func listItem(from line: String) -> (ordered: Bool, text: String, number: Int?)? {
         if line.hasPrefix("- ") || line.hasPrefix("* ") || line.hasPrefix("+ ") {
-            return (false, String(line.dropFirst(2)))
+            return (false, String(line.dropFirst(2)), nil)
         }
         guard let match = line.range(of: #"^\d+\.\s+"#, options: .regularExpression) else { return nil }
-        return (true, String(line[match.upperBound...]))
+        let number = Int(line.prefix { $0.isNumber })
+        return (true, String(line[match.upperBound...]), number)
     }
 
     private static func taskItem(from text: String) -> (checked: Bool, text: String)? {

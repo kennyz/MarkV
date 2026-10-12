@@ -139,9 +139,16 @@ final class AppModel: ObservableObject {
     @Published private(set) var currentFolder: URL?
     @Published private(set) var files: [MarkdownFile] = []
     @Published private(set) var recentFiles: [URL] = []
-    @Published private(set) var currentFile: URL?
+    @Published private(set) var currentFile: URL? {
+        didSet {
+            activeHeadingLevel = nil
+            restartDocumentMonitoring()
+        }
+    }
     @Published private(set) var documentText = ""
     @Published private(set) var isDirty = false
+    @Published private(set) var hasExternalChanges = false
+    @Published private(set) var activeHeadingLevel: Int?
     @Published var errorMessage: String?
     @Published var appearanceTheme: AppearanceTheme {
         didSet { defaults.set(appearanceTheme.rawValue, forKey: Keys.appearanceTheme) }
@@ -213,6 +220,9 @@ final class AppModel: ObservableObject {
     private var lastAIRequest: AIRequestContext?
     private var aiTask: Task<Void, Never>?
     private var didRequestAutomaticUpdateCheck = false
+    private var documentMonitor: DocumentFileMonitor?
+    private var documentMonitorID = UUID()
+    private var diskDocumentText = ""
 
     init(
         defaults: UserDefaults = .standard,
@@ -661,11 +671,31 @@ final class AppModel: ObservableObject {
 
     func updateDocument(_ newValue: String) {
         documentText = newValue
-        isDirty = currentFile != nil
+        isDirty = currentFile != nil && newValue != diskDocumentText
+        if !isDirty, hasExternalChanges, let file = currentFile,
+           let latest = try? String(contentsOf: file, encoding: .utf8) {
+            receiveExternalDocument(latest)
+        }
+    }
+
+    func documentEditingBegan() {
+        // Protect edits while the web editor's debounced text update is still pending.
+        if currentFile != nil { isDirty = true }
     }
 
     func performEditorAction(_ action: EditorAction) {
         editorCommand = EditorCommand(action: action)
+    }
+
+    func updateActiveHeadingLevel(_ level: Int) {
+        activeHeadingLevel = (1...6).contains(level) ? level : nil
+    }
+
+    var editorBlockTitle: String {
+        if let activeHeadingLevel {
+            return localizedFormat("Heading %d", activeHeadingLevel)
+        }
+        return text("Paragraph")
     }
 
     var aiConfiguration: AIConfiguration {
@@ -1035,9 +1065,19 @@ final class AppModel: ObservableObject {
     @discardableResult
     func save() -> Bool {
         guard let file = currentFile else { return false }
+        // Check synchronously too, so Save cannot race the next monitor tick.
+        if let latest = try? String(contentsOf: file, encoding: .utf8),
+           latest != diskDocumentText, latest != documentText {
+            receiveExternalDocument(latest)
+            errorMessage = text("This document changed outside MarkV. Load the latest version or save your edits as a copy.")
+            return false
+        }
         do {
             try documentText.write(to: file, atomically: true, encoding: .utf8)
+            diskDocumentText = documentText
             isDirty = false
+            hasExternalChanges = false
+            restartDocumentMonitoring()
             refreshFiles()
             return true
         } catch {
@@ -1072,11 +1112,92 @@ final class AppModel: ObservableObject {
 
         do {
             documentText = try String(contentsOf: url, encoding: .utf8)
+            diskDocumentText = documentText
             currentFile = url.standardizedFileURL
             isDirty = false
             addRecent(url)
         } catch {
             errorMessage = localizedFormat("Markv could not open %@: %@", url.lastPathComponent, error.localizedDescription)
+        }
+    }
+
+    private func restartDocumentMonitoring() {
+        documentMonitor?.stop()
+        documentMonitor = nil
+        documentMonitorID = UUID()
+        hasExternalChanges = false
+        guard let file = currentFile else { return }
+        let identifier = documentMonitorID
+        documentMonitor = DocumentFileMonitor(url: file) { [weak self] text in
+            guard let self, self.documentMonitorID == identifier else { return }
+            self.receiveExternalDocument(text)
+        }
+    }
+
+    private func receiveExternalDocument(_ latest: String) {
+        guard latest != diskDocumentText else {
+            hasExternalChanges = false
+            return
+        }
+        if isDirty, latest != documentText {
+            hasExternalChanges = true
+            return
+        }
+        cancelAIInteraction()
+        diskDocumentText = latest
+        documentText = latest
+        isDirty = false
+        hasExternalChanges = false
+        refreshFiles()
+    }
+
+    func confirmReloadCurrentDocument() {
+        guard let file = currentFile else { return }
+        if isDirty {
+            let alert = NSAlert()
+            alert.messageText = text("Load the latest version?")
+            alert.informativeText = text("Your unsaved edits will be discarded. Save a copy first if you want to keep them.")
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: text("Load Latest"))
+            alert.addButton(withTitle: text("Cancel"))
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+        cancelAIInteraction()
+        loadFile(file)
+        refreshFiles()
+    }
+
+    func chooseDocumentCopyDestination() {
+        guard let file = currentFile else { return }
+        let panel = NSSavePanel()
+        panel.title = text("Save a Copy…")
+        panel.nameFieldStringValue = file.deletingPathExtension().lastPathComponent + " copy.md"
+        panel.directoryURL = file.deletingLastPathComponent()
+        panel.allowedContentTypes = [UTType(filenameExtension: "md")].compactMap { $0 }
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        saveDocumentCopy(to: destination)
+    }
+
+    @discardableResult
+    func saveDocumentCopy(to destination: URL) -> Bool {
+        let destination = accessibleURL(destination, remember: true).standardizedFileURL
+        guard destination != currentFile?.standardizedFileURL else {
+            errorMessage = text("Choose a different file to keep both versions.")
+            return false
+        }
+        do {
+            try documentText.write(to: destination, atomically: true, encoding: .utf8)
+            let parent = destination.deletingLastPathComponent()
+            if canBrowseFolder(parent) {
+                currentFolder = parent
+                defaults.set(parent.path, forKey: Keys.lastFolder)
+            }
+            loadFile(destination)
+            refreshFiles()
+            return true
+        } catch {
+            errorMessage = localizedFormat("Markv could not save %@: %@", destination.lastPathComponent, error.localizedDescription)
+            return false
         }
     }
 

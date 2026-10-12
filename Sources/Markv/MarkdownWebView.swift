@@ -174,17 +174,22 @@ struct MarkdownWebView: NSViewRepresentable {
     let aiEnabled: Bool
     let command: EditorCommand?
     let onChange: (String) -> Void
+    let onEditingBegan: () -> Void
+    let onHeadingLevelChange: (Int) -> Void
     let onPDFExport: (Result<URL, Error>) -> Void
     let onImageImport: (EditorImagePayload) -> Void
     let onAIEvent: (EditorAIEvent) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(
+        let coordinator = Coordinator(
             onChange: onChange,
             onPDFExport: onPDFExport,
             onImageImport: onImageImport,
             onAIEvent: onAIEvent
         )
+        coordinator.onEditingBegan = onEditingBegan
+        coordinator.onHeadingLevelChange = onHeadingLevelChange
+        return coordinator
     }
 
     func makeNSView(context: Context) -> WKWebView {
@@ -203,6 +208,8 @@ struct MarkdownWebView: NSViewRepresentable {
             forMainFrameOnly: true
         ))
         configuration.userContentController.add(context.coordinator, name: "editorChanged")
+        configuration.userContentController.add(context.coordinator, name: "editorEditingBegan")
+        configuration.userContentController.add(context.coordinator, name: "editorHeadingChanged")
         configuration.userContentController.add(context.coordinator, name: "imageImported")
         configuration.userContentController.add(context.coordinator, name: "aiEvent")
 
@@ -227,6 +234,8 @@ struct MarkdownWebView: NSViewRepresentable {
 
     func updateNSView(_ webView: WKWebView, context: Context) {
         context.coordinator.onChange = onChange
+        context.coordinator.onEditingBegan = onEditingBegan
+        context.coordinator.onHeadingLevelChange = onHeadingLevelChange
         context.coordinator.onPDFExport = onPDFExport
         context.coordinator.onImageImport = onImageImport
         context.coordinator.onAIEvent = onAIEvent
@@ -251,6 +260,8 @@ struct MarkdownWebView: NSViewRepresentable {
 
     static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "editorChanged")
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "editorEditingBegan")
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "editorHeadingChanged")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "imageImported")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "aiEvent")
     }
@@ -272,6 +283,8 @@ struct MarkdownWebView: NSViewRepresentable {
         var isReady = false
         var pending: NativeState?
         var onChange: (String) -> Void
+        var onEditingBegan: () -> Void = {}
+        var onHeadingLevelChange: (Int) -> Void = { _ in }
         var onPDFExport: (Result<URL, Error>) -> Void
         var onImageImport: (EditorImagePayload) -> Void
         var onAIEvent: (EditorAIEvent) -> Void
@@ -300,7 +313,12 @@ struct MarkdownWebView: NSViewRepresentable {
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-            if message.name == "editorChanged", let markdown = message.body as? String {
+            if message.name == "editorEditingBegan" {
+                onEditingBegan()
+            } else if message.name == "editorHeadingChanged", let level = message.body as? Int {
+                onHeadingLevelChange(level)
+                return
+            } else if message.name == "editorChanged", let markdown = message.body as? String {
                 lastWebMarkdown = markdown
                 onChange(markdown)
                 return
@@ -559,6 +577,8 @@ struct MarkdownWebView: NSViewRepresentable {
         let applyingNative = false;
         let lastMarkdown = '';
         let inputTimer = null;
+        let composing = false;
+        let lastReportedHeadingLevel = null;
         let typewriterMode = false;
         let aiEnabled = false;
         let pendingAISelectionRange = null;
@@ -578,11 +598,16 @@ struct MarkdownWebView: NSViewRepresentable {
 
         function markvSetContent(html, markdown, theme, focus, typewriter, language, enabledAI, fontSize) {
           applyingNative = true;
+          clearTimeout(inputTimer);
           pendingImageRange = null;
           pendingAISelectionRange = null;
           pendingAISlashBlock = null;
           markvSetPresentation(theme, focus, typewriter, language, enabledAI, fontSize);
           editor.innerHTML = html || '<p><br></p>';
+          lastReportedHeadingLevel = null;
+          reportHeadingLevel(0);
+          document.execCommand('defaultParagraphSeparator', false, 'p');
+          document.execCommand('styleWithCSS', false, false);
           lastMarkdown = markdown;
           decorateDocument();
           applyingNative = false;
@@ -592,6 +617,65 @@ struct MarkdownWebView: NSViewRepresentable {
           editor.querySelectorAll('input[type=checkbox]').forEach(box => box.setAttribute('contenteditable','false'));
           refreshHeadingIDs();
           updateActiveBlock(false);
+        }
+
+        function normalizeEditorTypography() {
+          // WebKit preserves a deleted block's computed font in inline spans.
+          // Keep the DOM and selection intact; semantic elements own all typography.
+          editor.querySelectorAll('[style],font').forEach(node => {
+            node.removeAttribute('style');
+            if (node.tagName === 'FONT') {
+              ['face','size','color'].forEach(attribute => node.removeAttribute(attribute));
+            }
+          });
+        }
+
+        function cleanPastedHTML(html) {
+          const source = document.createElement('template');
+          source.innerHTML = html;
+          const allowed = new Set(['P','DIV','H1','H2','H3','H4','H5','H6','STRONG','B','EM','I',
+            'S','DEL','STRIKE','CODE','PRE','BLOCKQUOTE','UL','OL','LI','A','IMG','BR','HR',
+            'TABLE','THEAD','TBODY','TR','TH','TD','INPUT']);
+          function clean(node) {
+            if (node.nodeType === Node.TEXT_NODE) return document.createTextNode(node.nodeValue);
+            const fragment = document.createDocumentFragment();
+            if (node.nodeType !== Node.ELEMENT_NODE) return fragment;
+            if (['SCRIPT','STYLE','META','LINK','IFRAME','OBJECT'].includes(node.tagName)) return fragment;
+            let children = document.createDocumentFragment();
+            node.childNodes.forEach(child => children.appendChild(clean(child)));
+            // Word, web pages and the macOS clipboard often encode emphasis as CSS.
+            const weight = node.style.fontWeight;
+            if (!['B','STRONG'].includes(node.tagName) && (weight === 'bold' || Number(weight) >= 600)) {
+              const bold = document.createElement('strong'); bold.appendChild(children); children = bold;
+            }
+            if (!['I','EM'].includes(node.tagName) && node.style.fontStyle === 'italic') {
+              const italic = document.createElement('em'); italic.appendChild(children); children = italic;
+            }
+            if (!['S','DEL','STRIKE'].includes(node.tagName) && node.style.textDecoration.includes('line-through')) {
+              const strike = document.createElement('del'); strike.appendChild(children); children = strike;
+            }
+            if (!allowed.has(node.tagName)) return children;
+            const result = document.createElement(node.tagName.toLowerCase());
+            const attributes = {A:['href'], IMG:['src','alt','data-markv-src'], OL:['start'], CODE:['class']};
+            (attributes[node.tagName] || []).forEach(attribute => {
+              const value = node.getAttribute(attribute);
+              if (value !== null) result.setAttribute(attribute, value);
+            });
+            if (node.tagName === 'INPUT') {
+              if (node.type !== 'checkbox') return fragment;
+              result.type = 'checkbox'; result.checked = node.checked;
+              if (node.checked) result.setAttribute('checked', '');
+              result.setAttribute('contenteditable', 'false');
+            }
+            if (node.tagName === 'UL' && node.querySelector('input[type=checkbox]')) result.className = 'task-list';
+            if (node.tagName === 'LI' && node.querySelector('input[type=checkbox]')) result.className = 'task-item';
+            if (node.tagName === 'DIV' && node.classList.contains('table-wrap')) result.className = 'table-wrap';
+            result.appendChild(children);
+            return result;
+          }
+          const output = document.createElement('div');
+          source.content.childNodes.forEach(node => output.appendChild(clean(node)));
+          return output.innerHTML;
         }
 
         function refreshHeadingIDs() {
@@ -618,6 +702,7 @@ struct MarkdownWebView: NSViewRepresentable {
         }
 
         function updateActiveBlock(scroll) {
+          updateActiveHeading();
           editor.querySelectorAll(':scope > .active-block').forEach(node => node.classList.remove('active-block'));
           const block = activeTopBlock();
           if (!block) return;
@@ -627,10 +712,29 @@ struct MarkdownWebView: NSViewRepresentable {
           }
         }
 
+        function reportHeadingLevel(level) {
+          if (level === lastReportedHeadingLevel) return;
+          lastReportedHeadingLevel = level;
+          window.webkit.messageHandlers.editorHeadingChanged?.postMessage(level);
+        }
+
+        function updateActiveHeading() {
+          const selection = window.getSelection();
+          const focus = selection?.focusNode;
+          // Preserve the current label while a native toolbar menu has focus.
+          if (!focus || !editor.contains(focus)) return;
+          const element = focus.nodeType === Node.ELEMENT_NODE ? focus : focus.parentElement;
+          const heading = element?.closest('h1,h2,h3,h4,h5,h6');
+          reportHeadingLevel(heading && editor.contains(heading) ? Number(heading.tagName[1]) : 0);
+        }
+
         function scheduleChange(immediate=false) {
           if (applyingNative) return;
+          window.webkit.messageHandlers.editorEditingBegan.postMessage(true);
           clearTimeout(inputTimer);
           const send = () => {
+            if (composing) return;
+            normalizeEditorTypography();
             decorateDocument();
             const markdown = toMarkdown();
             lastMarkdown = markdown;
@@ -728,10 +832,18 @@ struct MarkdownWebView: NSViewRepresentable {
             candidate.kind === 'file' && String(candidate.type || '').startsWith('image/')
           );
           const file = item?.getAsFile();
-          if (!file) return;
           event.preventDefault();
-          rememberImageInsertionPoint();
-          transferImageFile(file);
+          if (file) {
+            rememberImageInsertionPoint();
+            transferImageFile(file);
+            return;
+          }
+          const html = event.clipboardData?.getData('text/html');
+          const text = event.clipboardData?.getData('text/plain') || '';
+          if (html) document.execCommand('insertHTML', false, cleanPastedHTML(html));
+          else document.execCommand('insertText', false, text);
+          normalizeEditorTypography();
+          scheduleChange(true);
         });
 
         editor.addEventListener('dragover', event => {
@@ -753,7 +865,21 @@ struct MarkdownWebView: NSViewRepresentable {
           transferImageFile(file);
         });
 
-        editor.addEventListener('input', () => {
+        editor.addEventListener('compositionstart', () => {
+          composing = true;
+          clearTimeout(inputTimer);
+          window.webkit.messageHandlers.editorEditingBegan.postMessage(true);
+        });
+        editor.addEventListener('compositionend', () => {
+          composing = false;
+          normalizeEditorTypography();
+          const converted = applyMarkdownShortcut();
+          requestSlashAI();
+          scheduleChange(converted);
+        });
+        editor.addEventListener('input', event => {
+          if (composing || event.isComposing) return;
+          normalizeEditorTypography();
           const converted = applyMarkdownShortcut();
           requestSlashAI();
           scheduleChange(converted);
@@ -761,6 +887,7 @@ struct MarkdownWebView: NSViewRepresentable {
         editor.addEventListener('change', () => scheduleChange(true));
         editor.addEventListener('blur', () => scheduleChange(true));
         editor.addEventListener('beforeinput', event => {
+          if (composing || event.isComposing) return;
           if (event.inputType !== 'insertParagraph') return;
           if (applyCodeFenceShortcut()) {
             event.preventDefault();
@@ -768,6 +895,7 @@ struct MarkdownWebView: NSViewRepresentable {
           }
         });
         editor.addEventListener('keydown', event => {
+          if (composing || event.isComposing) return;
           if (event.key === 'Enter' && applyCodeFenceShortcut()) {
             event.preventDefault();
             scheduleChange(true);
@@ -1002,17 +1130,23 @@ struct MarkdownWebView: NSViewRepresentable {
           if (/^h[1-6]$/.test(tag)) return `${'#'.repeat(Number(tag[1]))} ${inline(node).trim()}\n\n`;
           if (tag === 'p') return `${inline(node).replace(/\n+$/,'').trimEnd()}\n\n`;
           if (tag === 'div' && node.classList.contains('table-wrap')) return block(node.querySelector('table'), depth);
-          if (tag === 'div') return `${inline(node).trimEnd()}\n\n`;
+          if (tag === 'div') {
+            if (Array.from(node.children).some(child => /^(P|DIV|H[1-6]|UL|OL|BLOCKQUOTE|PRE|TABLE|HR)$/.test(child.tagName))) {
+              return Array.from(node.childNodes).map(child => block(child, depth)).join('');
+            }
+            return `${inline(node).trimEnd()}\n\n`;
+          }
           if (tag === 'blockquote') {
             const content = Array.from(node.childNodes).map(child => block(child,depth+1)).join('').trimEnd();
             return content.split('\n').map(line => `> ${line}`).join('\n') + '\n\n';
           }
           if (tag === 'ul' || tag === 'ol') {
             const ordered = tag === 'ol';
+            const start = Number(node.getAttribute('start')) || 1;
             return Array.from(node.children).filter(child => child.tagName.toLowerCase() === 'li').map((li,index) => {
-              const direct = Array.from(li.childNodes).filter(child => !(child.nodeType === Node.ELEMENT_NODE && ['ul','ol'].includes(child.tagName.toLowerCase()))).map(inline).join('').trim();
-              const prefix = ordered ? `${index+1}. ` : '- ';
-              const nested = Array.from(li.children).filter(child => ['ul','ol'].includes(child.tagName.toLowerCase())).map(child => block(child,depth+1).trimEnd().split('\n').map(line => `  ${line}`).join('\n')).join('\n');
+              const direct = Array.from(li.childNodes).filter(child => !(child.nodeType === Node.ELEMENT_NODE && ['ul','ol'].includes(child.tagName.toLowerCase()))).map(inline).join('').trim().replace(/^(\[[ x]\])\s+/, '$1 ');
+              const prefix = ordered ? `${start+index}. ` : '- ';
+              const nested = Array.from(li.children).filter(child => ['ul','ol'].includes(child.tagName.toLowerCase())).map(child => block(child,depth+1).trimEnd().split('\n').map(line => `${' '.repeat(prefix.length)}${line}`).join('\n')).join('\n');
               return prefix + direct + (nested ? `\n${nested}` : '');
             }).join('\n') + '\n\n';
           }
