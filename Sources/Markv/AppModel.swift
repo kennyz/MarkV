@@ -149,6 +149,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var isDirty = false
     @Published private(set) var hasExternalChanges = false
     @Published private(set) var activeHeadingLevel: Int?
+    @Published private(set) var isSourceMode = false
     @Published var errorMessage: String?
     @Published var appearanceTheme: AppearanceTheme {
         didSet { defaults.set(appearanceTheme.rawValue, forKey: Keys.appearanceTheme) }
@@ -689,6 +690,13 @@ final class AppModel: ObservableObject {
 
     func updateActiveHeadingLevel(_ level: Int) {
         activeHeadingLevel = (1...6).contains(level) ? level : nil
+    }
+
+    func updateEditorMode(source: Bool, markdown: String) {
+        cancelAIInteraction()
+        if markdown != documentText { updateDocument(markdown) }
+        isSourceMode = source
+        if source { activeHeadingLevel = nil }
     }
 
     var editorBlockTitle: String {

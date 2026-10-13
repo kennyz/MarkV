@@ -34,6 +34,7 @@ enum EditorAction: Equatable {
     case horizontalRule
     case jumpToHeading(String)
     case focusEditor
+    case toggleSourceMode
     case exportPDF(URL)
 }
 
@@ -173,9 +174,11 @@ struct MarkdownWebView: NSViewRepresentable {
     let language: AppLanguage
     let aiEnabled: Bool
     let command: EditorCommand?
+    let sourceMode: Bool
     let onChange: (String) -> Void
     let onEditingBegan: () -> Void
     let onHeadingLevelChange: (Int) -> Void
+    let onSourceModeChange: (Bool, String) -> Void
     let onPDFExport: (Result<URL, Error>) -> Void
     let onImageImport: (EditorImagePayload) -> Void
     let onAIEvent: (EditorAIEvent) -> Void
@@ -189,6 +192,7 @@ struct MarkdownWebView: NSViewRepresentable {
         )
         coordinator.onEditingBegan = onEditingBegan
         coordinator.onHeadingLevelChange = onHeadingLevelChange
+        coordinator.onSourceModeChange = onSourceModeChange
         return coordinator
     }
 
@@ -210,6 +214,7 @@ struct MarkdownWebView: NSViewRepresentable {
         configuration.userContentController.add(context.coordinator, name: "editorChanged")
         configuration.userContentController.add(context.coordinator, name: "editorEditingBegan")
         configuration.userContentController.add(context.coordinator, name: "editorHeadingChanged")
+        configuration.userContentController.add(context.coordinator, name: "editorModeChanged")
         configuration.userContentController.add(context.coordinator, name: "imageImported")
         configuration.userContentController.add(context.coordinator, name: "aiEvent")
 
@@ -227,7 +232,8 @@ struct MarkdownWebView: NSViewRepresentable {
             typewriterMode: typewriterMode,
             language: language.rawValue,
             aiEnabled: aiEnabled,
-            baseURL: baseURL
+            baseURL: baseURL,
+            sourceMode: sourceMode
         )
         return webView
     }
@@ -236,6 +242,7 @@ struct MarkdownWebView: NSViewRepresentable {
         context.coordinator.onChange = onChange
         context.coordinator.onEditingBegan = onEditingBegan
         context.coordinator.onHeadingLevelChange = onHeadingLevelChange
+        context.coordinator.onSourceModeChange = onSourceModeChange
         context.coordinator.onPDFExport = onPDFExport
         context.coordinator.onImageImport = onImageImport
         context.coordinator.onAIEvent = onAIEvent
@@ -248,7 +255,8 @@ struct MarkdownWebView: NSViewRepresentable {
             typewriterMode: typewriterMode,
             language: language.rawValue,
             aiEnabled: aiEnabled,
-            baseURL: baseURL
+            baseURL: baseURL,
+            sourceMode: sourceMode
         )
         context.coordinator.pending = state
 
@@ -262,6 +270,7 @@ struct MarkdownWebView: NSViewRepresentable {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "editorChanged")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "editorEditingBegan")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "editorHeadingChanged")
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "editorModeChanged")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "imageImported")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "aiEvent")
     }
@@ -278,6 +287,7 @@ struct MarkdownWebView: NSViewRepresentable {
             let language: String
             let aiEnabled: Bool
             let baseURL: URL?
+            var sourceMode = false
         }
 
         var isReady = false
@@ -285,6 +295,7 @@ struct MarkdownWebView: NSViewRepresentable {
         var onChange: (String) -> Void
         var onEditingBegan: () -> Void = {}
         var onHeadingLevelChange: (Int) -> Void = { _ in }
+        var onSourceModeChange: (Bool, String) -> Void = { _, _ in }
         var onPDFExport: (Result<URL, Error>) -> Void
         var onImageImport: (EditorImagePayload) -> Void
         var onAIEvent: (EditorAIEvent) -> Void
@@ -292,6 +303,7 @@ struct MarkdownWebView: NSViewRepresentable {
         private var lastNativeMarkdown: String?
         private var lastDocumentID = ""
         private var lastCommandID: UUID?
+        private var lastSourceMode = false
 
         init(
             onChange: @escaping (String) -> Void,
@@ -321,6 +333,13 @@ struct MarkdownWebView: NSViewRepresentable {
             } else if message.name == "editorChanged", let markdown = message.body as? String {
                 lastWebMarkdown = markdown
                 onChange(markdown)
+                return
+            } else if message.name == "editorModeChanged",
+                      let values = message.body as? [String: Any],
+                      let source = values["source"] as? Bool,
+                      let markdown = values["markdown"] as? String {
+                lastWebMarkdown = markdown
+                onSourceModeChange(source, markdown)
                 return
             }
             if handleAIMessage(message) { return }
@@ -396,20 +415,22 @@ struct MarkdownWebView: NSViewRepresentable {
             completion: (() -> Void)? = nil
         ) {
             let documentChanged = state.documentID != lastDocumentID
+            let modeChanged = state.sourceMode != lastSourceMode
             let originatedOutsideEditor = state.markdown != lastWebMarkdown && state.markdown != lastNativeMarkdown
 
-            if force || documentChanged || originatedOutsideEditor {
+            if force || documentChanged || originatedOutsideEditor || modeChanged {
                 let html = MarkdownRenderer.render(
                     state.markdown,
                     localImageBaseURL: state.baseURL
                 )
-                guard let payload = json([html, state.markdown, state.theme, state.focusMode, state.typewriterMode, state.language, state.aiEnabled, state.fontSize]) else { return }
+                guard let payload = json([html, state.markdown, state.theme, state.focusMode, state.typewriterMode, state.language, state.aiEnabled, state.fontSize, state.sourceMode, modeChanged && !documentChanged]) else { return }
                 webView.evaluateJavaScript("window.markvSetContent(...\(payload))") { _, _ in
                     completion?()
                 }
                 lastNativeMarkdown = state.markdown
                 lastWebMarkdown = nil
                 lastDocumentID = state.documentID
+                lastSourceMode = state.sourceMode
             } else if let payload = json([state.theme, state.focusMode, state.typewriterMode, state.language, state.aiEnabled, state.fontSize]) {
                 webView.evaluateJavaScript("window.markvSetPresentation(...\(payload))") { _, _ in
                     completion?()
@@ -452,6 +473,7 @@ struct MarkdownWebView: NSViewRepresentable {
             case .horizontalRule: (name, value) = ("horizontalRule", "")
             case .jumpToHeading(let anchor): (name, value) = ("jump", anchor)
             case .focusEditor: (name, value) = ("focus", "")
+            case .toggleSourceMode: (name, value) = ("sourceMode", "")
             case .exportPDF: return
             }
             guard let payload = json([name, value]) else { return }
@@ -459,7 +481,21 @@ struct MarkdownWebView: NSViewRepresentable {
         }
 
         private func exportPDF(from webView: WKWebView, to destination: URL) {
-            MarkvPDFExporter.export(webView, to: destination, completion: onPDFExport)
+            guard lastSourceMode else {
+                MarkvPDFExporter.export(webView, to: destination, completion: onPDFExport)
+                return
+            }
+            Task { @MainActor in
+                do {
+                    let markdown = try await webView.evaluateJavaScript("document.getElementById('source').value") as? String ?? ""
+                    let html = MarkdownRenderer.render(markdown, localImageBaseURL: pending?.baseURL)
+                    guard let payload = json([html]) else { throw PDFExportError.failed }
+                    _ = try await webView.evaluateJavaScript("window.markvSetRenderedHTML(...\(payload))")
+                    MarkvPDFExporter.export(webView, to: destination, completion: onPDFExport)
+                } catch {
+                    onPDFExport(.failure(error))
+                }
+            }
         }
 
         private func json(_ value: Any) -> String? {
@@ -525,6 +561,8 @@ struct MarkdownWebView: NSViewRepresentable {
         :hover::-webkit-scrollbar-thumb { background:rgba(114,115,109,.28); }
         ::-webkit-scrollbar-thumb:hover { background:rgba(114,115,109,.48); }
         #editor { max-width:920px; min-height:100vh; margin:0 auto; padding:24px 56px 160px; font-size:var(--editor-font-size,17px); line-height:1.78; caret-color:var(--accent); outline:none; }
+        [hidden] { display:none !important; }
+        #source { display:block; width:100%; max-width:920px; min-height:100vh; margin:0 auto; padding:24px 56px 160px; border:0; outline:none; resize:none; background:var(--paper); color:var(--ink); font-family:"SF Mono",ui-monospace,monospace; font-size:var(--editor-font-size,17px); line-height:1.7; tab-size:4; caret-color:var(--accent); }
         #editor:empty::before { content:"Start writing…"; color:var(--muted); opacity:.45; pointer-events:none; }
         :root[data-language="zh"] #editor:empty::before { content:"开始写作…"; }
         #editor > * { transition:opacity .16s ease; }
@@ -533,6 +571,8 @@ struct MarkdownWebView: NSViewRepresentable {
         body.pdf-export #editor { min-height:0; padding-bottom:24px; }
         body.pdf-export.focus-mode #editor > * { opacity:1; }
         body.pdf-export #editor:empty::before, body.pdf-export #editor:focus p:empty::after { content:none; }
+        body.pdf-export #editor { display:block !important; }
+        body.pdf-export #source { display:none !important; }
         ::selection { background:rgba(186,64,42,.16); }
         h1,h2,h3,h4,h5,h6 { color:var(--ink); line-height:1.2; margin:1.7em 0 .55em; letter-spacing:-.022em; }
         h1 { margin-top:0; font-size:2.55em; font-weight:700; padding-bottom:.32em; border-bottom:1px solid var(--line); }
@@ -567,13 +607,17 @@ struct MarkdownWebView: NSViewRepresentable {
           h1,h2,h3,h4,h5,h6 { break-after:avoid-page; }
           pre,blockquote,.table-wrap,img { break-inside:avoid-page; box-shadow:none; }
         }
-        @media(max-width:680px){ #editor{ padding:22px 30px 100px; } h1{font-size:2.1em;} }
+        @media(max-width:680px){ #editor,#source{ padding:22px 30px 100px; } h1{font-size:2.1em;} }
       </style>
     </head>
     <body>
       <main id="editor" contenteditable="true" spellcheck="true" role="textbox" aria-multiline="true"></main>
+      <textarea id="source" hidden spellcheck="false" aria-label="Markdown source"></textarea>
       <script>
         const editor = document.getElementById('editor');
+        const sourceEditor = document.getElementById('source');
+        let sourceMode = false;
+        let richTextEdited = false;
         let applyingNative = false;
         let lastMarkdown = '';
         let inputTimer = null;
@@ -593,10 +637,11 @@ struct MarkdownWebView: NSViewRepresentable {
           document.body.classList.toggle('focus-mode', !!focus);
           typewriterMode = !!typewriter;
           aiEnabled = !!enabledAI;
+          if (sourceMode) resizeSourceEditor();
           updateActiveBlock(false);
         }
 
-        function markvSetContent(html, markdown, theme, focus, typewriter, language, enabledAI, fontSize) {
+        function markvSetContent(html, markdown, theme, focus, typewriter, language, enabledAI, fontSize, editingSource=false, focusOnModeChange=false) {
           applyingNative = true;
           clearTimeout(inputTimer);
           pendingImageRange = null;
@@ -604,6 +649,12 @@ struct MarkdownWebView: NSViewRepresentable {
           pendingAISlashBlock = null;
           markvSetPresentation(theme, focus, typewriter, language, enabledAI, fontSize);
           editor.innerHTML = html || '<p><br></p>';
+          sourceMode = !!editingSource;
+          sourceEditor.value = markdown;
+          sourceEditor.hidden = !sourceMode;
+          editor.hidden = sourceMode;
+          richTextEdited = false;
+          resizeSourceEditor();
           lastReportedHeadingLevel = null;
           reportHeadingLevel(0);
           document.execCommand('defaultParagraphSeparator', false, 'p');
@@ -611,7 +662,26 @@ struct MarkdownWebView: NSViewRepresentable {
           lastMarkdown = markdown;
           decorateDocument();
           applyingNative = false;
+          if (focusOnModeChange) (sourceMode ? sourceEditor : editor).focus();
         }
+
+        function resizeSourceEditor() {
+          sourceEditor.style.height = 'auto';
+          sourceEditor.style.height = `${sourceEditor.scrollHeight}px`;
+        }
+
+        sourceEditor.addEventListener('input', () => {
+          resizeSourceEditor();
+          lastMarkdown = sourceEditor.value;
+          window.webkit.messageHandlers.editorEditingBegan.postMessage(true);
+          window.webkit.messageHandlers.editorChanged.postMessage(lastMarkdown);
+        });
+
+        function markvSetRenderedHTML(html) {
+          editor.innerHTML = html || '<p><br></p>';
+          decorateDocument();
+        }
+        window.markvSetRenderedHTML = markvSetRenderedHTML;
 
         function decorateDocument() {
           editor.querySelectorAll('input[type=checkbox]').forEach(box => box.setAttribute('contenteditable','false'));
@@ -719,6 +789,7 @@ struct MarkdownWebView: NSViewRepresentable {
         }
 
         function updateActiveHeading() {
+          if (sourceMode) return;
           const selection = window.getSelection();
           const focus = selection?.focusNode;
           // Preserve the current label while a native toolbar menu has focus.
@@ -728,15 +799,17 @@ struct MarkdownWebView: NSViewRepresentable {
           reportHeadingLevel(heading && editor.contains(heading) ? Number(heading.tagName[1]) : 0);
         }
 
-        function scheduleChange(immediate=false) {
-          if (applyingNative) return;
+        function scheduleChange(immediate=false, edited=true) {
+          if (applyingNative || sourceMode) return;
+          if (edited) richTextEdited = true;
           window.webkit.messageHandlers.editorEditingBegan.postMessage(true);
           clearTimeout(inputTimer);
           const send = () => {
             if (composing) return;
             normalizeEditorTypography();
             decorateDocument();
-            const markdown = toMarkdown();
+            const markdown = richTextEdited ? toMarkdown() : lastMarkdown;
+            richTextEdited = false;
             lastMarkdown = markdown;
             window.webkit.messageHandlers.editorChanged.postMessage(markdown);
           };
@@ -885,7 +958,7 @@ struct MarkdownWebView: NSViewRepresentable {
           scheduleChange(converted);
         });
         editor.addEventListener('change', () => scheduleChange(true));
-        editor.addEventListener('blur', () => scheduleChange(true));
+        editor.addEventListener('blur', () => scheduleChange(true, false));
         editor.addEventListener('beforeinput', event => {
           if (composing || event.isComposing) return;
           if (event.inputType !== 'insertParagraph') return;
@@ -999,6 +1072,16 @@ struct MarkdownWebView: NSViewRepresentable {
         }
 
         window.markvCommand = function(command, value) {
+          if (command === 'sourceMode') {
+            clearTimeout(inputTimer);
+            const markdown = sourceMode ? sourceEditor.value : (richTextEdited ? toMarkdown() : lastMarkdown);
+            window.webkit.messageHandlers.editorModeChanged.postMessage({source:!sourceMode, markdown});
+            return;
+          }
+          if (sourceMode) {
+            if (command === 'focus') sourceEditor.focus();
+            return;
+          }
           if (command === 'jump') {
             document.getElementById(value)?.scrollIntoView({behavior:'smooth',block:'start'});
             return;
@@ -1088,7 +1171,7 @@ struct MarkdownWebView: NSViewRepresentable {
             }
             case 'insertImage': insertImageSource(value); break;
           }
-          scheduleChange(true);
+          scheduleChange(true, command !== 'focus');
         };
 
         function wrapSelection(tagName) {

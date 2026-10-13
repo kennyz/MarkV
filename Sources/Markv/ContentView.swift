@@ -825,41 +825,58 @@ struct ContentView: View {
 
     private var formattingToolbar: some View {
         HStack(spacing: 3) {
-            Menu {
-                Button(model.text("Paragraph")) { model.performEditorAction(.paragraph) }
-                Divider()
-                ForEach(1...6, id: \.self) { level in
-                    Button(model.localizedFormat("Heading %d", level)) { model.performEditorAction(.heading(level)) }
+            Group {
+                Menu {
+                    Button(model.text("Paragraph")) { model.performEditorAction(.paragraph) }
+                    Divider()
+                    ForEach(1...6, id: \.self) { level in
+                        Button(model.localizedFormat("Heading %d", level)) { model.performEditorAction(.heading(level)) }
+                    }
+                } label: {
+                    Label(model.editorBlockTitle, systemImage: "textformat")
+                        .font(.custom("AvenirNext-Medium", size: 10))
+                        .padding(.horizontal, 7)
+                        .frame(height: 26)
                 }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+
+                toolbarDivider
+                editorButton("bold", help: model.text("Bold (⌘B)"), action: .bold)
+                editorButton("italic", help: model.text("Italic (⌘I)"), action: .italic)
+                editorButton("strikethrough", help: model.text("Strikethrough"), action: .strike)
+                editorButton("chevron.left.forwardslash.chevron.right", help: model.text("Inline Code"), action: .inlineCode)
+                toolbarDivider
+                editorButton("text.quote", help: model.text("Blockquote"), action: .quote)
+                editorButton("list.bullet", help: model.text("Bullet List"), action: .unorderedList)
+                editorButton("list.number", help: model.text("Numbered List"), action: .orderedList)
+                editorButton("checklist", help: model.text("Task List"), action: .taskList)
+                toolbarDivider
+                editorButton("link", help: model.text("Insert Link"), action: .link)
+                imageInsertMenu
+                editorButton("tablecells", help: model.text("Insert Table"), action: .table)
+                editorButton("curlybraces", help: model.text("Code Block"), action: .codeBlock)
+                editorButton("minus", help: model.text("Horizontal Rule"), action: .horizontalRule)
+                if model.aiEnabled {
+                    toolbarDivider
+                    aiEditMenu
+                }
+            }
+            .disabled(model.isSourceMode)
+            toolbarDivider
+            Button {
+                model.performEditorAction(.toggleSourceMode)
             } label: {
-                Label(model.editorBlockTitle, systemImage: "textformat")
+                Label(model.text("Source"), systemImage: "doc.plaintext")
                     .font(.custom("AvenirNext-Medium", size: 10))
                     .padding(.horizontal, 7)
                     .frame(height: 26)
             }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-
-            toolbarDivider
-            editorButton("bold", help: model.text("Bold (⌘B)"), action: .bold)
-            editorButton("italic", help: model.text("Italic (⌘I)"), action: .italic)
-            editorButton("strikethrough", help: model.text("Strikethrough"), action: .strike)
-            editorButton("chevron.left.forwardslash.chevron.right", help: model.text("Inline Code"), action: .inlineCode)
-            toolbarDivider
-            editorButton("text.quote", help: model.text("Blockquote"), action: .quote)
-            editorButton("list.bullet", help: model.text("Bullet List"), action: .unorderedList)
-            editorButton("list.number", help: model.text("Numbered List"), action: .orderedList)
-            editorButton("checklist", help: model.text("Task List"), action: .taskList)
-            toolbarDivider
-            editorButton("link", help: model.text("Insert Link"), action: .link)
-            imageInsertMenu
-            editorButton("tablecells", help: model.text("Insert Table"), action: .table)
-            editorButton("curlybraces", help: model.text("Code Block"), action: .codeBlock)
-            editorButton("minus", help: model.text("Horizontal Rule"), action: .horizontalRule)
-            if model.aiEnabled {
-                toolbarDivider
-                aiEditMenu
-            }
+            .buttonStyle(.plain)
+            .foregroundStyle(model.isSourceMode ? accent : ink.opacity(0.72))
+            .background(model.isSourceMode ? accent.opacity(0.10) : .clear, in: RoundedRectangle(cornerRadius: 5))
+            .help(model.text(model.isSourceMode ? "Switch to Visual Mode" : "Switch to Markdown Source"))
+            .accessibilityLabel(model.text(model.isSourceMode ? "Switch to Visual Mode" : "Switch to Markdown Source"))
             Spacer()
         }
         .foregroundStyle(ink.opacity(0.72))
@@ -1055,9 +1072,11 @@ struct ContentView: View {
             language: model.appLanguage,
             aiEnabled: model.aiEnabled,
             command: model.editorCommand,
+            sourceMode: model.isSourceMode,
             onChange: { model.updateDocument($0) },
             onEditingBegan: { model.documentEditingBegan() },
             onHeadingLevelChange: { model.updateActiveHeadingLevel($0) },
+            onSourceModeChange: { model.updateEditorMode(source: $0, markdown: $1) },
             onPDFExport: { model.handlePDFExportResult($0) },
             onImageImport: { payload in
                 model.importImageData(

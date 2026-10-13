@@ -1,5 +1,7 @@
 import AppKit
 import Foundation
+import PDFKit
+import SwiftUI
 import Testing
 import WebKit
 @testable import Markv
@@ -21,7 +23,7 @@ private final class EditingHarness {
         coordinator = MarkdownWebView.Coordinator(
             onChange: { _ in }, onPDFExport: { _ in }, onImageImport: { _ in }, onAIEvent: { _ in }
         )
-        for name in ["editorChanged", "editorEditingBegan", "editorHeadingChanged", "imageImported", "aiEvent"] {
+        for name in ["editorChanged", "editorEditingBegan", "editorHeadingChanged", "editorModeChanged", "imageImported", "aiEvent"] {
             configuration.userContentController.add(coordinator, name: name)
         }
         webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 900, height: 650), configuration: configuration)
@@ -51,6 +53,39 @@ private final class EditingHarness {
         return result as? String ?? ""
     }
 
+    func bind(_ model: AppModel) {
+        coordinator.onChange = { [weak self, weak model] text in
+            guard let self, let model else { return }
+            model.updateDocument(text)
+            self.apply(model)
+        }
+        coordinator.onSourceModeChange = { [weak self, weak model] source, text in
+            guard let self, let model else { return }
+            model.updateEditorMode(source: source, markdown: text)
+            self.apply(model)
+        }
+        apply(model)
+    }
+
+    func apply(_ model: AppModel) {
+        let state = MarkdownWebView.Coordinator.NativeState(
+            markdown: model.documentText, documentID: model.currentFile?.path ?? "mode-test", theme: "white",
+            fontSize: model.editorFontSize, focusMode: false, typewriterMode: false,
+            language: "zh", aiEnabled: false, baseURL: model.currentFile?.deletingLastPathComponent(),
+            sourceMode: model.isSourceMode
+        )
+        coordinator.pending = state
+        coordinator.apply(state, in: webView)
+    }
+
+    func waitForJavaScript(_ condition: String) async throws {
+        for _ in 0..<100 {
+            if try await evaluate("String(\(condition));") == "true" { return }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(try await evaluate("String(\(condition));") == "true")
+    }
+
     func snapshot(_ name: String) async throws {
         guard let directory = ProcessInfo.processInfo.environment["MARKV_EDITING_SNAPSHOTS"] else { return }
         let image = try await webView.takeSnapshot(configuration: nil)
@@ -59,6 +94,181 @@ private final class EditingHarness {
         let folder = URL(fileURLWithPath: directory, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try data.write(to: folder.appendingPathComponent(name + ".png"))
+    }
+}
+
+@MainActor
+private func withSourceDocument(_ body: (EditingHarness, AppModel, URL) async throws -> Void) async throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let file = folder.appendingPathComponent("source.md")
+    let original = "# 标题\n\n正文  \n换行\n\n* 第一项\n* 第二项\n\n"
+    try original.write(to: file, atomically: true, encoding: .utf8)
+    let suite = "MarkvSourceTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let model = AppModel(defaults: defaults, restoreLastFolder: false)
+    model.appLanguage = .chinese
+    model.openFile(file)
+    let harness = EditingHarness()
+    try await harness.load(original)
+    harness.bind(model)
+    try await body(harness, model, file)
+}
+
+@Test @MainActor func sourceModePreservesOriginalMarkdownAndSavesEditsAcrossSwitches() async throws {
+    try await withSourceDocument { harness, model, file in
+        let original = model.documentText
+        harness.coordinator.execute(EditorCommand(action: .toggleSourceMode), in: harness.webView)
+        try await harness.waitForJavaScript("!sourceEditor.hidden")
+        #expect(model.isSourceMode)
+        #expect(try await harness.evaluate("sourceEditor.value;") == original)
+        #expect(!model.isDirty)
+        #expect(try await harness.evaluate("document.activeElement.id;") == "source")
+        _ = try await harness.evaluate("""
+            sourceEditor.value = '## 新标题\\n\\n源码编辑 **加粗**\\n';
+            sourceEditor.setSelectionRange(5,5);
+            sourceEditor.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertText'}));
+            'done';
+            """)
+        try await harness.waitForJavaScript("sourceEditor.selectionStart === 5")
+        #expect(model.isDirty)
+        #expect(model.save())
+        #expect(try String(contentsOf: file, encoding: .utf8) == "## 新标题\n\n源码编辑 **加粗**\n")
+        try await harness.snapshot("markdown-source")
+        harness.coordinator.execute(EditorCommand(action: .toggleSourceMode), in: harness.webView)
+        try await harness.waitForJavaScript("!editor.hidden && editor.querySelector('h2')?.textContent === '新标题'")
+        #expect(!model.isSourceMode)
+        #expect(try await harness.evaluate("editor.querySelector('strong').textContent;") == "加粗")
+        #expect(!model.isDirty)
+        harness.coordinator.execute(EditorCommand(action: .toggleSourceMode), in: harness.webView)
+        try await harness.waitForJavaScript("!sourceEditor.hidden")
+        #expect(try await harness.evaluate("sourceEditor.value;") == model.documentText)
+        #expect(!model.isDirty)
+    }
+}
+
+@Test @MainActor func sourceModeFlushesPendingVisualInputAndPreservesSourceCaretOnUpdates() async throws {
+    try await withSourceDocument { harness, model, _ in
+        _ = try await harness.evaluate("""
+            placeCaretAtEnd(editor.querySelector('p'));
+            document.execCommand('insertText', false, '刚输入的文字');
+            markvCommand('sourceMode', '');
+            'done';
+            """)
+        try await harness.waitForJavaScript("!sourceEditor.hidden && sourceEditor.value.includes('刚输入的文字')")
+        _ = try await harness.evaluate("""
+            sourceEditor.focus(); sourceEditor.setSelectionRange(0,0);
+            document.execCommand('insertText', false, '源码前缀');
+            'done';
+            """)
+        try await harness.waitForJavaScript("sourceEditor.value.startsWith('源码前缀')")
+        try await Task.sleep(for: .milliseconds(250))
+        #expect(model.documentText.hasPrefix("源码前缀"))
+        #expect(model.documentText.contains("刚输入的文字"))
+        #expect(try await harness.evaluate("String(sourceEditor.selectionStart);") == "4")
+        model.increaseFontSize()
+        harness.apply(model)
+        try await harness.waitForJavaScript("getComputedStyle(sourceEditor).fontSize === '18px'")
+        #expect(try await harness.evaluate("String(sourceEditor.selectionStart);") == "4")
+    }
+}
+
+@Test @MainActor func sourceModeReloadsCleanExternalChangesAndProtectsDirtySource() async throws {
+    try await withSourceDocument { harness, model, file in
+        harness.coordinator.execute(EditorCommand(action: .toggleSourceMode), in: harness.webView)
+        try await harness.waitForJavaScript("!sourceEditor.hidden")
+        try "# 外部更新\n".write(to: file, atomically: true, encoding: .utf8)
+        for _ in 0..<100 {
+            if model.documentText == "# 外部更新\n" { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        harness.apply(model)
+        try await harness.waitForJavaScript("sourceEditor.value === '# 外部更新\\n'")
+        _ = try await harness.evaluate("sourceEditor.value = '# 未保存的源码'; sourceEditor.dispatchEvent(new InputEvent('input', {bubbles:true})); 'done';")
+        try await Task.sleep(for: .milliseconds(50))
+        try "# 再次外部更新\n".write(to: file, atomically: true, encoding: .utf8)
+        for _ in 0..<100 {
+            if model.hasExternalChanges { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(model.hasExternalChanges)
+        #expect(!model.save())
+        #expect(model.documentText == "# 未保存的源码")
+        #expect(try await harness.evaluate("sourceEditor.value;") == "# 未保存的源码")
+    }
+}
+
+@Test @MainActor func sourceModePDFExportUsesLatestRenderedContent() async throws {
+    try await withSourceDocument { harness, _, file in
+        harness.coordinator.execute(EditorCommand(action: .toggleSourceMode), in: harness.webView)
+        try await harness.waitForJavaScript("!sourceEditor.hidden")
+        _ = try await harness.evaluate("sourceEditor.value = '# Latest source export'; sourceEditor.dispatchEvent(new InputEvent('input', {bubbles:true})); 'done';")
+        try await Task.sleep(for: .milliseconds(50))
+        let destination = file.deletingLastPathComponent().appendingPathComponent("export.pdf")
+        var result: Result<URL, Error>?
+        harness.coordinator.onPDFExport = { result = $0 }
+        harness.coordinator.execute(EditorCommand(action: .exportPDF(destination)), in: harness.webView)
+        for _ in 0..<200 {
+            if result != nil { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let exported = try #require(result).get()
+        let pdf = try #require(PDFDocument(url: exported))
+        #expect(pdf.string?.contains("Latest source export") == true)
+        #expect(try await harness.evaluate("String(sourceEditor.hidden);") == "false")
+    }
+}
+
+@Test @MainActor func sourceModeToolbarSwitchesThroughTheNativeView() async throws {
+    try await withSourceDocument { _, model, _ in
+        let hosting = NSHostingView(rootView: ContentView().environmentObject(model))
+        hosting.frame = CGRect(x: 0, y: 0, width: 1200, height: 800)
+        let window = NSWindow(contentRect: hosting.frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.contentView = hosting
+        hosting.layoutSubtreeIfNeeded()
+        @MainActor func findWebView(_ view: NSView) -> WKWebView? {
+            if let web = view as? WKWebView { return web }
+            for child in view.subviews {
+                if let web = findWebView(child) { return web }
+            }
+            return nil
+        }
+        var web: WKWebView?
+        for _ in 0..<150 {
+            web = findWebView(hosting)
+            if let web, (try? await web.evaluateJavaScript("typeof markvSetContent")) as? String == "function" { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let webView = try #require(web)
+        let original = model.documentText
+        model.performEditorAction(.toggleSourceMode)
+        for _ in 0..<150 {
+            if model.isSourceMode, (try? await webView.evaluateJavaScript("!document.getElementById('source').hidden")) as? Bool == true { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(model.isSourceMode)
+        #expect(model.documentText == original)
+        #expect(!model.isDirty)
+        #expect((try await webView.evaluateJavaScript("document.getElementById('source').getBoundingClientRect().height")) as? Double ?? 0 > 0)
+        if let directory = ProcessInfo.processInfo.environment["MARKV_EDITING_SNAPSHOTS"],
+           let bitmap = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) {
+            window.orderFront(nil)
+            defer { window.orderOut(nil) }
+            try await Task.sleep(for: .milliseconds(250))
+            hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+            let data = try #require(bitmap.representation(using: .png, properties: [:]))
+            try data.write(to: URL(fileURLWithPath: directory).appendingPathComponent("source-toolbar.png"))
+        }
+        model.performEditorAction(.toggleSourceMode)
+        for _ in 0..<150 {
+            if !model.isSourceMode { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(!model.isSourceMode)
+        #expect(model.documentText == original)
+        withExtendedLifetime(window) {}
     }
 }
 
